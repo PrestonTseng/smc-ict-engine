@@ -1,0 +1,14 @@
+schedule:
+  enabled: true
+  timezone: UTC
+  jobs:
+    - id: source-aligned-research
+      cron: "7 */1 * * *"
+      strategy: /config/strategies/source-aligned-research.yaml
+      market_data: /config/market-data.yaml
+      notifications: /config/notifications.yaml
+      misfire_policy: skip
+      misfire_grace_seconds: 120
+      overlap_policy: skip
+      maximum_runtime_seconds: 900
+      startup_delay_seconds: 5

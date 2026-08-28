@@ -1,0 +1,79 @@
+name: source-aligned-research
+version: "1"
+instruments:
+  - BTC-USDT-PERP
+  - ETH-USDT-PERP
+history_minutes: 129600
+roles:
+  regime: 4h
+  context: 1h
+  execution: 5m
+signals:
+  - id: smc.swing_structure
+    role: regime
+    depends_on: []
+    parameters:
+      swing_length: 50
+      show_labels: true
+    required: true
+    effect: REJECT
+    order: 10
+  - id: smc.equal_high_low
+    role: context
+    depends_on: [smc.swing_structure]
+    parameters:
+      confirmation_bars: 3
+      threshold_atr_fraction: "0.1"
+    required: true
+    effect: REJECT
+    order: 20
+  - id: smc.order_block
+    role: context
+    depends_on: [smc.swing_structure]
+    parameters:
+      scope: swing
+      volatility_filter: atr
+      mitigation_source: close
+      maximum_blocks: 5
+    required: true
+    effect: REJECT
+    order: 30
+  - id: ict.clustered_liquidity
+    role: execution
+    depends_on: [smc.equal_high_low]
+    parameters:
+      pivot_width: 1
+      minimum_pivots: 3
+      margin_atr_fraction: "0.1"
+    required: true
+    effect: REJECT
+    order: 40
+  - id: ict.market_structure
+    role: execution
+    depends_on: [ict.clustered_liquidity]
+    parameters:
+      pivot_width: 1
+      emit_mss: true
+      emit_bos: true
+    required: true
+    effect: REJECT
+    order: 50
+  - id: ict.fair_value_gap
+    role: execution
+    depends_on: [ict.market_structure]
+    parameters:
+      kind: ordinary
+      require_displacement: true
+      displacement_length: 20
+      mitigation: full_traversal
+    required: true
+    effect: REJECT
+    order: 60
+  - id: project.risk_levels
+    role: execution
+    depends_on: [ict.clustered_liquidity, ict.fair_value_gap]
+    parameters:
+      minimum_reward_risk: "2.0"
+    required: true
+    effect: LEVELS
+    order: 70

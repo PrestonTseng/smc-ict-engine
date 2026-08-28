@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SMC ICT Engine deployment boundary</title>
+  <style>
+    body { background: #101820; color: #e8f1f2; font: 16px system-ui, sans-serif; margin: 2rem; }
+    main { max-width: 900px; margin: auto; }
+    .flow { display: grid; gap: 1rem; grid-template-columns: repeat(3, 1fr); }
+    .box { background: #1e2d3a; border: 1px solid #4aa3a2; border-radius: .5rem; padding: 1rem; }
+    code { color: #91d7e3; }
+    p { line-height: 1.5; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Local deployment boundary</h1>
+    <div class="flow">
+      <section class="box"><h2>Compose</h2><p>The engine service owns the scheduler and graceful shutdown.</p></section>
+      <section class="box"><h2>Configuration</h2><p>Read-only configuration and strategy mounts select providers and the DAG.</p></section>
+      <section class="box"><h2>SQLite</h2><p>The only durable store is <code>./data/smc_ict.db</code>, mounted as <code>/data/smc_ict.db</code>.</p></section>
+    </div>
+    <p>Secrets enter only through an environment reference or the Docker secret file. Endpoint values are not configuration data or receipts.</p>
+    <p>The engine analyzes completed candles. It does not trade.</p>
+  </main>
+</body>
+</html>

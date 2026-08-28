@@ -1,0 +1,6 @@
+market_data:
+  provider: okx_swap
+  market_type: LINEAR_PERPETUAL
+  instruments:
+    BTC-USDT-PERP: BTC-USDT-SWAP
+    ETH-USDT-PERP: ETH-USDT-SWAP

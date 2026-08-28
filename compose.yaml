@@ -1,0 +1,52 @@
+x-runtime: &runtime
+  build:
+    context: .
+    args:
+      GIT_COMMIT: ${SMC_ICT_GIT_COMMIT:?Set SMC_ICT_GIT_COMMIT to the immutable 40-character commit}
+  image: smc-ict-engine:${SMC_ICT_GIT_COMMIT:?Set SMC_ICT_GIT_COMMIT to the immutable 40-character commit}
+  pull_policy: never
+  init: true
+  user: "10001:10001"
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  tmpfs: ["/tmp:rw,noexec,nosuid,size=16m"]
+  volumes:
+    - ./data:/data
+    - ./config:/config:ro
+    - ./strategies:/config/strategies:ro
+  environment:
+    DISCORD_1_WEBHOOK_URL: ${DISCORD_1_WEBHOOK_URL:-}
+  secrets:
+    - discord_2_webhook_url
+
+services:
+  engine:
+    <<: *runtime
+    command:
+      - scheduler
+      - --schedule
+      - /config/schedule.yaml
+      - --database
+      - /data/smc_ict.db
+      - --lock
+      - /data/engine.lock
+      - --health-file
+      - /data/scheduler.ready
+    restart: unless-stopped
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "smc-ict", "scheduler-health", "--health-file", "/data/scheduler.ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  manual:
+    <<: *runtime
+    profiles: [manual]
+    command: ["--help"]
+
+secrets:
+  discord_2_webhook_url:
+    file: ./secrets/discord_2_webhook_url

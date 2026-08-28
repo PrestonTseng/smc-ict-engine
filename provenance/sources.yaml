@@ -1,0 +1,29 @@
+sources:
+  smc_luxalgo:
+    title: Smart Money Concepts [LuxAlgo]
+    page: https://tw.tradingview.com/script/CnB3fSph-Smart-Money-Concepts-SMC-LuxAlgo/
+    facade: https://pine-facade.tradingview.com/pine-facade/get/PUB;6daafb2cabe6419d98ae25229d2327f8/7
+    script_id: PUB;6daafb2cabe6419d98ae25229d2327f8
+    facade_version: 7
+    source_line_count: 848
+    retrieved: "2026-08-26"
+    sha256: 880717919e24049e19271cc41ba408b93d4dd4e556034b6d837084593db6275a
+    license: CC BY-NC-SA 4.0
+    copyright: LuxAlgo
+    pine_declaration: indicator
+    conformance_status: deferred
+    conformance_reason: pinned TradingView expected-output vectors are missing
+  ict_luxalgo:
+    title: ICT Concepts [LuxAlgo]
+    page: https://tw.tradingview.com/script/ib4uqBJx-ICT-Concepts-LuxAlgo/
+    facade: https://pine-facade.tradingview.com/pine-facade/get/PUB;de59cffec59b4962aafbd56321152fe8/1
+    script_id: PUB;de59cffec59b4962aafbd56321152fe8
+    facade_version: 1
+    source_line_count: 1144
+    retrieved: "2026-08-26"
+    sha256: a000fe76c60e89d6b782b2d67aeae426ad373379033ec259fa908dffba6bd452
+    license: CC BY-NC-SA 4.0
+    copyright: LuxAlgo
+    pine_declaration: indicator
+    conformance_status: deferred
+    conformance_reason: pinned TradingView expected-output vectors are missing

@@ -1,0 +1,43 @@
+notifications:
+  enabled: true
+  destinations:
+    discord_1:
+      adapter: generic_webhook
+      enabled: true
+      enabled_events: [run_started, run_succeeded, run_failed, decision_found, no_decision]
+      endpoint:
+        env: DISCORD_1_WEBHOOK_URL
+      timeout_seconds: 5
+      retries:
+        maximum_attempts: 3
+        backoff_seconds: [1, 2]
+      deduplication:
+        window_seconds: 300
+        key_fields: [event_type, run_id, instrument_id]
+      batching:
+        maximum_events: 20
+        flush_seconds: 2
+      redaction:
+        headers: [authorization, cookie, set-cookie]
+        query_parameters: [token, key, signature]
+      failure_policy: warning
+    discord_2:
+      adapter: generic_webhook
+      enabled: true
+      enabled_events: [decision_found]
+      endpoint:
+        file: /run/secrets/discord_2_webhook_url
+      timeout_seconds: 5
+      retries:
+        maximum_attempts: 2
+        backoff_seconds: [1]
+      deduplication:
+        window_seconds: 300
+        key_fields: [event_type, run_id, instrument_id]
+      batching:
+        maximum_events: 10
+        flush_seconds: 2
+      redaction:
+        headers: [authorization, cookie, set-cookie]
+        query_parameters: [token, key, signature]
+      failure_policy: warning
