@@ -1,5 +1,5 @@
 sources:
-  smc_luxalgo:
+  "smc_luxalgo@7":
     title: Smart Money Concepts [LuxAlgo]
     page: https://tw.tradingview.com/script/CnB3fSph-Smart-Money-Concepts-SMC-LuxAlgo/
     facade: https://pine-facade.tradingview.com/pine-facade/get/PUB;6daafb2cabe6419d98ae25229d2327f8/7
@@ -11,9 +11,9 @@ sources:
     license: CC BY-NC-SA 4.0
     copyright: LuxAlgo
     pine_declaration: indicator
-    conformance_status: deferred
-    conformance_reason: pinned TradingView expected-output vectors are missing
-  ict_luxalgo:
+    python_implementation_status: active_closed_bar_translation
+    python_plugins: [smc.swing_structure, smc.equal_high_low, smc.order_block]
+  "ict_luxalgo@1":
     title: ICT Concepts [LuxAlgo]
     page: https://tw.tradingview.com/script/ib4uqBJx-ICT-Concepts-LuxAlgo/
     facade: https://pine-facade.tradingview.com/pine-facade/get/PUB;de59cffec59b4962aafbd56321152fe8/1
@@ -25,5 +25,12 @@ sources:
     license: CC BY-NC-SA 4.0
     copyright: LuxAlgo
     pine_declaration: indicator
-    conformance_status: deferred
-    conformance_reason: pinned TradingView expected-output vectors are missing
+    python_implementation_status: active_closed_bar_translation
+    python_plugins: [ict.clustered_liquidity, ict.market_structure, ict.fair_value_gap]
+  "project_strategy@1":
+    title: Source-aligned research strategy contract
+    path: strategies/source-aligned-research.yaml
+    version: "1"
+    sha256: df50568d922c022e32f79ed3e8e3bc8e100c1fb3cf1155e0b2ee347e09d2e12d
+    python_implementation_status: active_strategy_owned_composition
+    python_plugins: [project.risk_levels]

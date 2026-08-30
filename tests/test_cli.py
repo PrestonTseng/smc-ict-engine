@@ -21,7 +21,9 @@ def _cli(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def test_actual_cli_rejects_deferred_strategy_before_bootstrapping_database(tmp_path: Path) -> None:
+def test_actual_cli_accepts_implemented_strategy_before_bootstrapping_database(
+    tmp_path: Path,
+) -> None:
     validated = _cli(
         "validate",
         "--strategy",
@@ -31,11 +33,8 @@ def test_actual_cli_rejects_deferred_strategy_before_bootstrapping_database(tmp_
         "--schedule",
         "config/schedule.yaml",
     )
-    assert validated.returncode == 2
-    validation_error = json.loads(validated.stderr)
-    assert validation_error["status"] == "ERROR"
-    assert "DEFERRED_PLUGIN" in validation_error["error"]
-    assert "smc.swing_structure" in validation_error["error"]
+    assert validated.returncode == 0, validated.stderr
+    assert json.loads(validated.stdout) == {"status": "VALID"}
 
     database = tmp_path / "runtime.sqlite3"
     bootstrap = _cli("database", "bootstrap", "--database", str(database))
@@ -198,22 +197,10 @@ def test_scheduler_cli_has_no_complete_job_retry_policy() -> None:
         )
 
 
-def test_one_shot_cli_returns_a_failed_receipt_when_plugins_fail_closed(tmp_path: Path) -> None:
-    result = _cli(
-        "run",
-        "--strategy",
-        "strategies/source-aligned-research.yaml",
-        "--market-data",
-        "config/market-data.yaml",
-        "--database",
-        str(tmp_path / "runtime.sqlite3"),
-        "--lock",
-        str(tmp_path / "engine.lock"),
-    )
+def test_one_shot_cli_runner_wires_all_implemented_plugins_without_network(tmp_path: Path) -> None:
+    from smc_ict.composition.runtime_services import build_engine_runner
+    from smc_ict.configuration import IMPLEMENTED_PLUGIN_IDS
 
-    assert result.returncode == 1
-    receipt = json.loads(result.stdout)
-    assert receipt["status"] == "FAILED"
-    assert receipt["trigger"] == "manual"
-    assert receipt["run_id"] is None
-    assert "unavailable" in receipt["error"]
+    runner = build_engine_runner(tmp_path / "runtime.sqlite3", tmp_path / "engine.lock")
+
+    assert tuple(sorted(runner._plugin_factories)) == tuple(sorted(IMPLEMENTED_PLUGIN_IDS))

@@ -96,7 +96,7 @@ def test_foundation_registries_are_closed_and_reject_unknown_or_unavailable_ids(
         root.providers.resolve("binance")
     with pytest.raises(UnknownComponentError, match="unknown plugin"):
         root.plugins.resolve("smc.missing")
-    with pytest.raises(UnavailableComponentError, match="conformance"):
+    with pytest.raises(UnavailableComponentError, match="does not install concrete plugins"):
         root.plugins.resolve("smc.swing_structure")
     with pytest.raises(UnavailableComponentError, match="implementation"):
         root.providers.resolve("binance_usdm")

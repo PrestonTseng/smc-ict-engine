@@ -10,8 +10,15 @@ from smc_ict.adapters.market_data.binance_usdm import BinanceUsdmProvider
 from smc_ict.adapters.market_data.okx_swap import OkxSwapProvider
 from smc_ict.adapters.persistence.sqlite import SQLiteRepository
 from smc_ict.application.ports import KlineProvider
-from smc_ict.configuration import DEFERRED_PLUGIN_IDS
+from smc_ict.configuration import IMPLEMENTED_PLUGIN_IDS
 from smc_ict.configuration.models import MarketDataConfig
+from smc_ict.indicators.ict import (
+    ClusteredLiquidityPlugin,
+    FairValueGapPlugin,
+    MarketStructurePlugin,
+)
+from smc_ict.indicators.risk import RiskLevelsPlugin
+from smc_ict.indicators.smc import EqualHighLowPlugin, OrderBlockPlugin, SwingStructurePlugin
 
 Factory = Callable[..., object]
 
@@ -80,7 +87,8 @@ def foundation_composition_root() -> CompositionRoot:
         plugins=ClosedRegistry(
             "plugin",
             _unavailable(
-                tuple(DEFERRED_PLUGIN_IDS), "pinned source-conformance vectors are missing"
+                tuple(IMPLEMENTED_PLUGIN_IDS),
+                "the foundation composition root does not install concrete plugins",
             ),
         ),
         notifiers=ClosedRegistry(
@@ -113,16 +121,23 @@ def market_data_composition_root() -> CompositionRoot:
 
 
 def indicator_composition_root() -> CompositionRoot:
-    """Keep all candidate modules unavailable until both source gates are satisfied."""
+    """Install the seven directly translated, closed-bar indicator factories."""
 
     root = market_data_composition_root()
-    reason = (
-        "provenance is recorded but conformance is required; pinned TradingView "
-        "expected-output vectors are missing"
-    )
     return CompositionRoot(
         providers=root.providers,
-        plugins=ClosedRegistry("plugin", _unavailable(tuple(DEFERRED_PLUGIN_IDS), reason)),
+        plugins=ClosedRegistry(
+            "plugin",
+            {
+                "smc.swing_structure": RegistryEntry(SwingStructurePlugin, None),
+                "smc.equal_high_low": RegistryEntry(EqualHighLowPlugin, None),
+                "smc.order_block": RegistryEntry(OrderBlockPlugin, None),
+                "ict.clustered_liquidity": RegistryEntry(ClusteredLiquidityPlugin, None),
+                "ict.market_structure": RegistryEntry(MarketStructurePlugin, None),
+                "ict.fair_value_gap": RegistryEntry(FairValueGapPlugin, None),
+                "project.risk_levels": RegistryEntry(RiskLevelsPlugin, None),
+            },
+        ),
         notifiers=root.notifiers,
         repositories=root.repositories,
     )

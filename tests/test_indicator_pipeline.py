@@ -414,20 +414,24 @@ def test_ordered_decision_policy_uses_configured_level_output_without_inventing_
     assert decision.first_failed_signal is None
 
 
-def test_all_seven_candidate_modules_fail_closed_on_provenance_and_conformance_gates() -> None:
-    from smc_ict.composition import UnavailableComponentError, indicator_composition_root
-    from smc_ict.configuration import DEFERRED_PLUGIN_IDS
+def test_all_seven_source_aligned_modules_are_registered_as_real_factories() -> None:
+    from smc_ict.application.ports import IndicatorPlugin
+    from smc_ict.composition import indicator_composition_root
+    from smc_ict.configuration import IMPLEMENTED_PLUGIN_IDS, load_strategy
 
     root = indicator_composition_root()
 
-    assert root.plugins.ids == tuple(sorted(DEFERRED_PLUGIN_IDS))
+    assert root.plugins.ids == tuple(sorted(IMPLEMENTED_PLUGIN_IDS))
     assert len(root.plugins.ids) == 7
     for plugin_id in root.plugins.ids:
-        with pytest.raises(
-            UnavailableComponentError,
-            match="provenance.*conformance.*TradingView expected-output vectors",
-        ):
-            root.plugins.resolve(plugin_id)
+        parameters = next(
+            signal.parameters
+            for signal in load_strategy(
+                Path(__file__).parents[1] / "strategies/source-aligned-research.yaml"
+            ).signals
+            if signal.id == plugin_id
+        )
+        assert isinstance(root.plugins.resolve(plugin_id)(parameters), IndicatorPlugin)
 
 
 def test_first_party_provenance_records_preserve_attribution_and_publication_boundary() -> None:
@@ -448,10 +452,7 @@ def test_strategy_configuration_wires_graph_and_decision_order_without_source_br
     from smc_ict.application.graph import configured_nodes
     from smc_ict.configuration import load_strategy
 
-    strategy = load_strategy(
-        Path(__file__).parents[1] / "strategies/source-aligned-research.yaml",
-        allow_deferred=True,
-    )
+    strategy = load_strategy(Path(__file__).parents[1] / "strategies/source-aligned-research.yaml")
 
     nodes = configured_nodes(strategy)
     decision_signals = configured_decision_signals(strategy)
@@ -465,6 +466,75 @@ def test_strategy_configuration_wires_graph_and_decision_order_without_source_br
     assert tuple(signal.signal_id for signal in decision_signals) == tuple(
         signal.id for signal in strategy.signals
     )
+
+
+def test_seven_node_graph_replay_is_byte_deterministic_end_to_end() -> None:
+    import json
+
+    from smc_ict.application.decision_policy import (
+        OrderedDecisionPlugin,
+        configured_decision_signals,
+    )
+    from smc_ict.application.graph import IndicatorGraph, RunContext, configured_nodes
+    from smc_ict.application.resampling import DerivedCandle
+    from smc_ict.composition import indicator_composition_root
+    from smc_ict.configuration import load_strategy
+    from smc_ict.domain import hash_decision, hash_observation
+
+    strategy = load_strategy(Path(__file__).parents[1] / "strategies/source-aligned-research.yaml")
+    root = indicator_composition_root()
+    factories = {plugin_id: root.plugins.resolve(plugin_id) for plugin_id in root.plugins.ids}
+    graph = IndicatorGraph(nodes=configured_nodes(strategy), factories=factories)  # type: ignore[arg-type]
+
+    def role_candles(interval: str, count: int) -> tuple[DerivedCandle, ...]:
+        duration = {"5m": 300_000, "1h": 3_600_000, "4h": 14_400_000}[interval]
+        return tuple(
+            DerivedCandle(
+                "BTC-USDT-PERP",
+                interval,
+                index * duration,
+                (index + 1) * duration - 1,
+                "100",
+                "101",
+                "99",
+                "100",
+                "1",
+                "1",
+            )
+            for index in range(count)
+        )
+
+    roles = {
+        "regime": role_candles("4h", 60),
+        "context": role_candles("1h", 220),
+        "execution": role_candles("5m", 30),
+    }
+    context = RunContext("BTC-USDT-PERP", roles["regime"][-1].close_time_ms, roles)
+    policy = OrderedDecisionPlugin(configured_decision_signals(strategy))
+
+    first = graph.execute(context)
+    second = graph.execute(context)
+    first_decision = policy.decide(context, first)
+    second_decision = policy.decide(context, second)
+    first_bytes = json.dumps(
+        {
+            "observations": [hash_observation(value) for value in first.values()],
+            "decision": hash_decision(first_decision),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    second_bytes = json.dumps(
+        {
+            "observations": [hash_observation(value) for value in second.values()],
+            "decision": hash_decision(second_decision),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+
+    assert tuple(first) == tuple(signal.id for signal in strategy.signals)
+    assert first_bytes == second_bytes
 
 
 def test_observation_and_decision_records_persist_idempotently_with_canonical_evidence(

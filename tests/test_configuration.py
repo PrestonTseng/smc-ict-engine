@@ -99,14 +99,14 @@ signals:
   - id: ict.clustered_liquidity
     role: execution
     depends_on: [smc.equal_high_low]
-    parameters: {pivot_width: 1, minimum_pivots: 3, margin_atr_fraction: "0.1"}
+    parameters: {pivot_width: 5, minimum_pivots: 3, margin_atr_fraction: "0.4"}
     required: true
     effect: REJECT
     order: 40
   - id: ict.market_structure
     role: execution
     depends_on: [ict.clustered_liquidity]
-    parameters: {pivot_width: 1, emit_mss: true, emit_bos: true}
+    parameters: {pivot_width: 5, emit_mss: true, emit_bos: true}
     required: true
     effect: REJECT
     order: 50
@@ -286,14 +286,12 @@ def test_notifications_loader_retains_only_secret_references() -> None:
     assert config.destinations["discord_2"].endpoint.name == "/run/secrets/discord_2_webhook_url"
 
 
-def test_strategy_normalizes_decimal_strings_and_fails_closed_for_deferred_plugins() -> None:
+def test_strategy_normalizes_decimal_strings_for_implemented_plugins() -> None:
     a = api()
     config = a["load_strategy_text"](STRATEGY, allow_deferred=True)
     assert config.signals[1].parameters["threshold_atr_fraction"] == "0.1"
     assert len(a["hash_strategy"](config)) == 64
-    with pytest.raises(a["DeferredPluginError"]) as caught:
-        a["load_strategy_text"](STRATEGY)
-    assert set(caught.value.plugin_ids) == {signal.id for signal in config.signals}
+    assert a["load_strategy_text"](STRATEGY) == config
 
 
 def test_strategy_rejects_wrong_authority_unknown_plugin_and_numeric_decimal() -> None:
@@ -307,6 +305,82 @@ def test_strategy_rejects_wrong_authority_unknown_plugin_and_numeric_decimal() -
     for bad in bads:
         with pytest.raises(a["StrictConfigurationError"]):
             a["load_strategy_text"](bad, allow_deferred=True)
+
+
+def test_strategy_rejects_plugin_role_timeframe_and_dependency_contract_mismatches() -> None:
+    a = api()
+
+    with pytest.raises(a["StrictConfigurationError"], match="configured role"):
+        a["load_strategy_text"](STRATEGY.replace("role: regime", "role: context", 1))
+    with pytest.raises(a["StrictConfigurationError"], match="configured timeframe"):
+        a["load_strategy_text"](
+            STRATEGY.replace(
+                "roles: {regime: 4h, context: 1h, execution: 5m}",
+                "roles: {regime: 1h, context: 4h, execution: 5m}",
+            )
+        )
+    with pytest.raises(a["StrictConfigurationError"], match="configured dependencies"):
+        a["load_strategy_text"](
+            STRATEGY.replace("depends_on: [smc.swing_structure]", "depends_on: []", 1)
+        )
+
+
+@pytest.mark.parametrize("width", [3, 5, 10])
+def test_strategy_accepts_source_valid_ict_left_pivot_width_boundaries(width: int) -> None:
+    a = api()
+    text = STRATEGY.replace("pivot_width: 5", f"pivot_width: {width}")
+
+    config = a["load_strategy_text"](text)
+
+    assert config.signals[3].parameters["pivot_width"] == width
+    assert config.signals[4].parameters["pivot_width"] == width
+
+
+@pytest.mark.parametrize("width", [True, 2, 11])
+def test_strategy_rejects_non_integer_or_out_of_range_ict_left_pivot_width(
+    width: object,
+) -> None:
+    a = api()
+    rendered = "true" if width is True else str(width)
+    text = STRATEGY.replace("pivot_width: 5", f"pivot_width: {rendered}", 1)
+
+    with pytest.raises(a["StrictConfigurationError"], match="pivot_width"):
+        a["load_strategy_text"](text)
+
+
+@pytest.mark.parametrize("margin", ["0.2", "0.4", "0.7"])
+def test_strategy_accepts_only_source_representable_liquidity_margin_tenths(
+    margin: str,
+) -> None:
+    a = api()
+    text = STRATEGY.replace('margin_atr_fraction: "0.4"', f'margin_atr_fraction: "{margin}"')
+
+    config = a["load_strategy_text"](text)
+
+    assert config.signals[3].parameters["margin_atr_fraction"] == margin
+
+
+@pytest.mark.parametrize("margin", ["0.1", "0.25", "0.8"])
+def test_strategy_rejects_non_source_liquidity_margin_fraction(margin: str) -> None:
+    a = api()
+    text = STRATEGY.replace('margin_atr_fraction: "0.4"', f'margin_atr_fraction: "{margin}"')
+
+    with pytest.raises(a["StrictConfigurationError"], match="margin_atr_fraction"):
+        a["load_strategy_text"](text)
+
+
+def test_checked_in_strategy_uses_source_default_ict_left_width_and_margin() -> None:
+    a = api()
+    path = Path(__file__).parents[1] / "strategies" / "source-aligned-research.yaml"
+
+    config = a["load_strategy_text"](path.read_text(encoding="utf-8"))
+
+    assert config.signals[3].parameters == {
+        "pivot_width": 5,
+        "minimum_pivots": 3,
+        "margin_atr_fraction": "0.4",
+    }
+    assert config.signals[4].parameters["pivot_width"] == 5
 
 
 def test_loader_file_boundary_reads_utf8_yaml(tmp_path: Path) -> None:
