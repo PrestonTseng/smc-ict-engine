@@ -262,12 +262,39 @@ def test_notifications_load_two_destinations_without_retaining_secrets() -> None
 
 def test_notifications_loader_accepts_native_discord_adapter() -> None:
     a = api()
-    text = NOTIFICATIONS.replace("adapter: generic_webhook", "adapter: discord_webhook", 1)
+    text = NOTIFICATIONS.replace("adapter: generic_webhook", "adapter: discord_webhook", 1).replace(
+        "maximum_events: 20", "maximum_events: 10", 1
+    )
 
     config = a["load_notifications_text"](text, **notification_kwargs())
 
     assert config.destinations["discord_1"].adapter == "discord_webhook"
     assert config.destinations["discord_2"].adapter == "generic_webhook"
+
+
+@pytest.mark.parametrize("maximum_events", [11, 1000])
+def test_notifications_loader_rejects_discord_batch_above_ten(maximum_events: int) -> None:
+    a = api()
+    text = NOTIFICATIONS.replace("adapter: generic_webhook", "adapter: discord_webhook", 1).replace(
+        "maximum_events: 20", f"maximum_events: {maximum_events}", 1
+    )
+
+    with pytest.raises(
+        a["StrictConfigurationError"],
+        match=r"notifications\.destinations\.discord_1\.batching\.maximum_events: "
+        rf"expected 1\.\.10, got {maximum_events}",
+    ):
+        a["load_notifications_text"](text, **notification_kwargs())
+
+
+@pytest.mark.parametrize("maximum_events", [11, 1000])
+def test_notifications_loader_preserves_generic_webhook_batch_bound(maximum_events: int) -> None:
+    a = api()
+    text = NOTIFICATIONS.replace("maximum_events: 20", f"maximum_events: {maximum_events}", 1)
+
+    config = a["load_notifications_text"](text, **notification_kwargs())
+
+    assert config.destinations["discord_1"].batching.maximum_events == maximum_events
 
 
 @pytest.mark.parametrize(

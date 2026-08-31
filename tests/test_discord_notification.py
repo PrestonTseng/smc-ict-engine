@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from email.message import Message
+from pathlib import Path
 from typing import Any, cast
 from urllib.error import HTTPError
 
@@ -310,3 +311,61 @@ def test_discord_adapter_rejects_batch_above_destination_bound_before_transport(
 
     with pytest.raises(ValueError, match="configured bounds"):
         adapter.deliver_batch((event, event))
+
+
+def test_loaded_discord_config_routes_only_formatter_compatible_batches() -> None:
+    from smc_ict.application.notifications import NotificationRouter
+    from smc_ict.application.ports import Notifier
+    from smc_ict.composition.registries import notification_composition_root
+    from smc_ict.configuration import load_notifications_text
+
+    source = (
+        Path("config/notifications.yaml")
+        .read_text(encoding="utf-8")
+        .replace(
+            "endpoint:\n        file: /run/secrets/discord_webhook_url",
+            "endpoint: {env: DISCORD_HOOK}",
+        )
+    )
+    config = load_notifications_text(source)
+    root = notification_composition_root()
+    requests: list[Any] = []
+
+    class Response:
+        def __enter__(self) -> Response:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def getcode(self) -> int:
+            return 204
+
+    def opened(request: Any, *, timeout: float) -> Response:
+        requests.append(request)
+        assert timeout == 5
+        return Response()
+
+    def adapter_factory(destination_id: str, destination: NotificationDestination) -> Notifier:
+        candidate = root.notifiers.resolve(destination.adapter)(
+            destination_id,
+            destination,
+            environ={"DISCORD_HOOK": "https://discord.invalid/api/webhooks/id/token"},
+            opener=opened,
+            clock_seconds=lambda: 1,
+        )
+        assert isinstance(candidate, Notifier)
+        return candidate
+
+    router = NotificationRouter(config, adapter_factory=adapter_factory, clock_seconds=lambda: 1)
+    events = tuple(
+        NotificationEvent("run_started", f"run-{index}", None, "strategy", 1, {})
+        for index in range(11)
+    )
+
+    first = router.deliver_all(events)
+    final = router.close()
+
+    assert first.outcome == "ALL_SUCCESS"
+    assert final.outcome == "ALL_SUCCESS"
+    assert [len(json.loads(request.data)["embeds"]) for request in requests] == [10, 1]

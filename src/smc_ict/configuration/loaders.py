@@ -417,7 +417,10 @@ def _notification_destination(
         ),
         BatchingConfig(
             bounded_int(
-                batching_raw["maximum_events"], f"{field}.batching.maximum_events", 1, 1000
+                batching_raw["maximum_events"],
+                f"{field}.batching.maximum_events",
+                1,
+                10 if adapter == "discord_webhook" else 1000,
             ),
             bounded_int(batching_raw["flush_seconds"], f"{field}.batching.flush_seconds", 1, 300),
         ),
