@@ -203,6 +203,24 @@ def test_graph_rejects_observation_timeframe_that_does_not_match_configured_role
         graph.execute(RunContext("BTC-USDT-PERP", 0, {"regime": ()}))
 
 
+def test_graph_rejects_plugin_role_that_does_not_match_configured_node() -> None:
+    from smc_ict.application.graph import ConfiguredNode, IndicatorGraph, RunContext
+
+    class ContextPlugin:
+        role = "context"
+
+        def evaluate(self, context: object, dependencies: object) -> object:
+            return (context, dependencies)
+
+    graph = IndicatorGraph(
+        nodes=(ConfiguredNode("instance", "fixture", "execution", (), {}, 1, timeframe="15m"),),
+        factories={"fixture": lambda _parameters: ContextPlugin()},
+    )
+
+    with pytest.raises(ValueError, match="role"):
+        graph.execute(RunContext("BTC-USDT-PERP", 0, {"execution": ()}))
+
+
 def test_graph_hash_is_canonical_and_changes_only_with_configured_instances() -> None:
     from smc_ict.application.graph import ConfiguredNode, IndicatorGraph
 

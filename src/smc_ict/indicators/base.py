@@ -22,6 +22,21 @@ class Candle(Protocol):
     close: str
 
 
+def configured_timeframe(context: RunContext, role: str) -> str:
+    """Resolve a role's timeframe from its configured candle series."""
+
+    configured = context.timeframes_by_role.get(role)
+    if configured is not None:
+        return configured
+    raw = context.candles_by_role.get(role)
+    if raw is None:
+        raise ValueError(f"missing candle role {role!r}")
+    intervals = {cast(Candle, value).interval for value in raw}
+    if len(intervals) != 1:
+        raise ValueError("configured role must contain one non-empty timeframe")
+    return intervals.pop()
+
+
 def closed_candles(context: RunContext, role: str, timeframe: str) -> tuple[Candle, ...]:
     """Return one validated, ordered, completed candle series for a configured role."""
 
@@ -73,10 +88,11 @@ class DependencyProblem:
 _DEPENDENCY_TIMEFRAMES = {
     "smc.swing_structure": "4h",
     "smc.equal_high_low": "1h",
-    "ict.clustered_liquidity": "5m",
-    "ict.market_structure": "5m",
-    "ict.fair_value_gap": "5m",
 }
+
+_EXECUTION_DEPENDENCIES = frozenset(
+    {"ict.clustered_liquidity", "ict.market_structure", "ict.fair_value_gap"}
+)
 
 
 def dependency_problem(
@@ -93,7 +109,12 @@ def dependency_problem(
             raise ValueError("dependency observation signal ID mismatch")
         if observation.instrument_id != context.instrument_id:
             raise ValueError("dependency observation instrument mismatch")
-        if observation.timeframe != _DEPENDENCY_TIMEFRAMES[dependency_id]:
+        expected_timeframe = (
+            configured_timeframe(context, "execution")
+            if dependency_id in _EXECUTION_DEPENDENCIES
+            else _DEPENDENCY_TIMEFRAMES[dependency_id]
+        )
+        if observation.timeframe != expected_timeframe:
             raise ValueError("dependency observation timeframe mismatch")
         if (
             observation.known_time_ms is not None

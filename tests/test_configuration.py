@@ -294,6 +294,20 @@ def test_strategy_normalizes_decimal_strings_for_implemented_plugins() -> None:
     assert a["load_strategy_text"](STRATEGY) == config
 
 
+def test_strategy_accepts_exact_15m_execution_role_without_aliases_or_unsafe_types() -> None:
+    a = api()
+    exact = STRATEGY.replace("execution: 5m", "execution: 15m")
+
+    assert a["load_strategy_text"](exact).roles["execution"] == "15m"
+
+    for alias in ("15M", "015m", "900s", "quarter-hour"):
+        with pytest.raises(a["StrictConfigurationError"], match="timeframe"):
+            a["load_strategy_text"](STRATEGY.replace("execution: 5m", f"execution: {alias}"))
+    for unsafe in ("15", "true", "null"):
+        with pytest.raises(a["StrictConfigurationError"], match="expected string"):
+            a["load_strategy_text"](STRATEGY.replace("execution: 5m", f"execution: {unsafe}"))
+
+
 def test_strategy_rejects_wrong_authority_unknown_plugin_and_numeric_decimal() -> None:
     a = api()
     bads = [

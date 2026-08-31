@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from hashlib import sha256
 from types import MappingProxyType
 
 from smc_ict.application.ports.plugins import IndicatorPlugin
 from smc_ict.configuration.models import StrategyConfig
-from smc_ict.domain import InstrumentId, Observation
+from smc_ict.domain import InstrumentId, Observation, Timeframe
 from smc_ict.domain.evidence_values import canonical_evidence, freeze_evidence
 
 
@@ -67,6 +67,7 @@ class RunContext:
     instrument_id: str
     evaluation_time_ms: int
     candles_by_role: Mapping[str, tuple[object, ...]]
+    timeframes_by_role: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "instrument_id", str(InstrumentId(self.instrument_id)))
@@ -77,6 +78,16 @@ class RunContext:
             "candles_by_role",
             MappingProxyType(
                 {role: tuple(candles) for role, candles in self.candles_by_role.items()}
+            ),
+        )
+        object.__setattr__(
+            self,
+            "timeframes_by_role",
+            MappingProxyType(
+                {
+                    role: str(Timeframe(timeframe))
+                    for role, timeframe in self.timeframes_by_role.items()
+                }
             ),
         )
 
@@ -179,6 +190,9 @@ class IndicatorGraph:
             if node.role not in context.candles_by_role:
                 raise ValueError(f"missing candle role {node.role!r}")
             plugin = self._factories[node.plugin_id](node.parameters)
+            plugin_role = getattr(plugin, "role", node.role)
+            if plugin_role != node.role:
+                raise ValueError("plugin role does not match configured node")
             dependency_values = MappingProxyType(
                 {dependency: observations[dependency] for dependency in node.depends_on}
             )

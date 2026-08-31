@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
+import json
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
+from hashlib import sha256
 from itertools import pairwise
 from types import MappingProxyType
 
 from smc_ict.domain import ClosedCandle, DecimalText, InstrumentId, Timeframe
-
-_MINUTES = {"5m": 5, "1h": 60, "4h": 240}
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,7 +35,7 @@ class DerivedCandle:
         if timeframe == "1m":
             raise ValueError("derived candles require a higher timeframe")
         object.__setattr__(self, "interval", str(timeframe))
-        duration = _MINUTES[self.interval] * 60_000
+        duration = timeframe.duration_minutes * 60_000
         if self.open_time_ms < 0 or self.open_time_ms % duration != 0:
             raise ValueError("derived candle must align to a UTC timeframe boundary")
         if self.close_time_ms != self.open_time_ms + duration - 1:
@@ -49,12 +49,22 @@ class DerivedCandle:
         return {field: getattr(self, field) for field in self.__dataclass_fields__}
 
 
-def resample_complete(candles: Sequence[ClosedCandle], timeframe: str) -> tuple[DerivedCandle, ...]:
+def resample_complete(
+    candles: Sequence[ClosedCandle],
+    timeframe: str,
+    *,
+    evaluation_time_ms: int | None = None,
+) -> tuple[DerivedCandle, ...]:
     """Return only fully populated UTC buckets; reject ambiguous input series."""
 
-    canonical_timeframe = str(Timeframe(timeframe))
-    if canonical_timeframe == "1m":
+    canonical = Timeframe(timeframe)
+    canonical_timeframe = str(canonical)
+    if canonical == "1m":
         raise ValueError("resampling requires a higher timeframe")
+    if evaluation_time_ms is not None and type(evaluation_time_ms) is not int:
+        raise TypeError("evaluation time must be an integer; Boolean is not integer")
+    if evaluation_time_ms is not None and evaluation_time_ms < 0:
+        raise ValueError("evaluation time must be non-negative")
     if not candles:
         return ()
     ordered = tuple(candles)
@@ -78,10 +88,12 @@ def resample_complete(candles: Sequence[ClosedCandle], timeframe: str) -> tuple[
     if any(right.open_time_ms != left.open_time_ms + 60_000 for left, right in pairwise(ordered)):
         raise ValueError("resampling input must be monotonic and contiguous")
 
-    minutes = _MINUTES[canonical_timeframe]
+    minutes = canonical.duration_minutes
     duration = minutes * 60_000
     buckets: dict[int, list[ClosedCandle]] = defaultdict(list)
     for candle in ordered:
+        if evaluation_time_ms is not None and candle.close_time_ms > evaluation_time_ms:
+            continue
         bucket_start = candle.open_time_ms - candle.open_time_ms % duration
         buckets[bucket_start].append(candle)
 
@@ -117,7 +129,10 @@ def resample_complete(candles: Sequence[ClosedCandle], timeframe: str) -> tuple[
 
 
 def resample_roles(
-    candles: Sequence[ClosedCandle], roles: Mapping[str, str]
+    candles: Sequence[ClosedCandle],
+    roles: Mapping[str, str],
+    *,
+    evaluation_time_ms: int | None = None,
 ) -> Mapping[str, tuple[DerivedCandle, ...]]:
     """Bind configured logical roles without embedding role-specific timeframes."""
 
@@ -129,7 +144,9 @@ def resample_roles(
         if type(role) is not str or not role:
             raise ValueError("role identifiers must be non-empty strings")
         if timeframe not in cache:
-            cache[timeframe] = resample_complete(candles, timeframe)
+            cache[timeframe] = resample_complete(
+                candles, timeframe, evaluation_time_ms=evaluation_time_ms
+            )
         result[role] = cache[timeframe]
     return MappingProxyType(result)
 
@@ -137,3 +154,18 @@ def resample_roles(
 def _sum_decimal(values: Iterable[str]) -> str:
     total = sum((Decimal(value) for value in values), start=Decimal(0))
     return str(DecimalText(format(total, "f")))
+
+
+def hash_derived_candles(candles: Sequence[DerivedCandle]) -> str:
+    """Hash provider-neutral derived rows in full canonical row order."""
+
+    rows = [candle.canonical_dict() for candle in candles]
+    rows.sort(key=_canonical_json)
+    encoded = _canonical_json(rows).encode("utf-8")
+    return sha256(b"derived-candles-v1\0" + encoded).hexdigest()
+
+
+def _canonical_json(value: object) -> str:
+    return json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
+    )

@@ -9,6 +9,8 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path, PurePosixPath
 from typing import Never
 
+from smc_ict.domain import Timeframe
+
 from .errors import StrictConfigurationError
 from .models import (
     BatchingConfig,
@@ -29,7 +31,7 @@ from .yaml_loader import CanonicalValue, load_yaml_12
 
 PROVIDERS = frozenset({"binance_usdm", "okx_swap"})
 MARKET_TYPE = "LINEAR_PERPETUAL"
-TIMEFRAMES = frozenset({"1m", "5m", "1h", "4h"})
+TIMEFRAMES = frozenset(Timeframe.allowed_values())
 EVENTS = frozenset({"run_started", "run_succeeded", "run_failed", "decision_found", "no_decision"})
 DEDUPE_KEYS = frozenset({"event_type", "run_id", "instrument_id", "strategy_id"})
 HEADERS = frozenset({"authorization", "cookie", "set-cookie", "proxy-authorization"})
@@ -54,15 +56,27 @@ IMPLEMENTED_PLUGIN_IDS = (
 # Backwards-compatible export retained for callers compiled against the foundation release.
 DEFERRED_PLUGIN_IDS = IMPLEMENTED_PLUGIN_IDS
 PLUGIN_CONTRACTS = {
-    "smc.swing_structure": ("regime", "4h", ()),
-    "smc.equal_high_low": ("context", "1h", ("smc.swing_structure",)),
-    "smc.order_block": ("context", "1h", ("smc.swing_structure",)),
-    "ict.clustered_liquidity": ("execution", "5m", ("smc.equal_high_low",)),
-    "ict.market_structure": ("execution", "5m", ("ict.clustered_liquidity",)),
-    "ict.fair_value_gap": ("execution", "5m", ("ict.market_structure",)),
+    "smc.swing_structure": ("regime", frozenset({"4h"}), ()),
+    "smc.equal_high_low": ("context", frozenset({"1h"}), ("smc.swing_structure",)),
+    "smc.order_block": ("context", frozenset({"1h"}), ("smc.swing_structure",)),
+    "ict.clustered_liquidity": (
+        "execution",
+        frozenset({"5m", "15m"}),
+        ("smc.equal_high_low",),
+    ),
+    "ict.market_structure": (
+        "execution",
+        frozenset({"5m", "15m"}),
+        ("ict.clustered_liquidity",),
+    ),
+    "ict.fair_value_gap": (
+        "execution",
+        frozenset({"5m", "15m"}),
+        ("ict.market_structure",),
+    ),
     "project.risk_levels": (
         "execution",
-        "5m",
+        frozenset({"5m", "15m"}),
         ("ict.clustered_liquidity", "ict.fair_value_gap"),
     ),
 }
@@ -564,7 +578,9 @@ def load_strategy_text(text: str, *, allow_deferred: bool = False) -> StrategyCo
         if ROLE_RE.fullmatch(role) is None:
             fail(f"strategy.roles.{role}", "invalid role identifier")
         timeframe = exact_str(timeframe_value, f"strategy.roles.{role}")
-        if timeframe not in TIMEFRAMES:
+        try:
+            timeframe = str(Timeframe(timeframe))
+        except ValueError:
             fail(
                 f"strategy.roles.{role}",
                 f"unknown timeframe; allowed values are {sorted(TIMEFRAMES)}",
@@ -588,13 +604,13 @@ def load_strategy_text(text: str, *, allow_deferred: bool = False) -> StrategyCo
         dependencies = unique_strings(signal["depends_on"], f"{field}.depends_on", empty=True)
         if any(dependency not in seen_ids for dependency in dependencies):
             fail(f"{field}.depends_on", "dependencies must name earlier configured signals")
-        expected_role, expected_timeframe, expected_dependencies = PLUGIN_CONTRACTS[plugin_id]
+        expected_role, expected_timeframes, expected_dependencies = PLUGIN_CONTRACTS[plugin_id]
         if role != expected_role:
             fail(f"{field}.role", f"configured role must be {expected_role}")
-        if roles[role] != expected_timeframe:
+        if roles[role] not in expected_timeframes:
             fail(
                 f"strategy.roles.{role}",
-                f"configured timeframe must be {expected_timeframe}",
+                f"configured timeframe must be one of {sorted(expected_timeframes)}",
             )
         if dependencies != expected_dependencies:
             fail(

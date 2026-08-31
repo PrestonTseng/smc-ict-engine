@@ -233,7 +233,12 @@ class EngineRunner:
                 context = RunContext(
                     instrument_id,
                     latest_open + 59_999,
-                    resample_roles(by_instrument[instrument_id], strategy.roles),
+                    resample_roles(
+                        by_instrument[instrument_id],
+                        strategy.roles,
+                        evaluation_time_ms=latest_open + 59_999,
+                    ),
+                    strategy.roles,
                 )
                 instrument_observations = graph.execute(context)
                 observations.extend(instrument_observations.values())

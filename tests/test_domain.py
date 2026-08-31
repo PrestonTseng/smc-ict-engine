@@ -22,7 +22,12 @@ def test_identifiers_and_utc_timestamp_are_canonical() -> None:
     from smc_ict.domain import EventType, InstrumentId, Timeframe, UtcTimestamp
 
     assert str(InstrumentId("BTC-USDT-PERP")) == "BTC-USDT-PERP"
-    assert str(Timeframe("5m")) == "5m"
+    assert str(Timeframe("15m")) == "15m"
+    assert Timeframe("1m").duration_minutes == 1
+    assert Timeframe("5m").duration_minutes == 5
+    assert Timeframe("15m").duration_minutes == 15
+    assert Timeframe("1h").duration_minutes == 60
+    assert Timeframe("4h").duration_minutes == 240
     assert str(EventType("decision_found")) == "decision_found"
     stamp = UtcTimestamp.from_milliseconds(1_800_000)
     assert stamp.milliseconds == 1_800_000
@@ -32,8 +37,12 @@ def test_identifiers_and_utc_timestamp_are_canonical() -> None:
     for invalid in ("btc-usdt-perp", "BTCUSDT", "BTC/USDT"):
         with pytest.raises(ValueError):
             InstrumentId(invalid)
-    with pytest.raises(ValueError):
-        Timeframe("15m")
+    for invalid in ("15M", "015m", "900s", "quarter-hour", " 15m"):
+        with pytest.raises(ValueError):
+            Timeframe(invalid)
+    for invalid_type in (15, True, None):
+        with pytest.raises(TypeError):
+            Timeframe(invalid_type)
     with pytest.raises(ValueError):
         EventType("unknown")
     with pytest.raises(ValueError):
