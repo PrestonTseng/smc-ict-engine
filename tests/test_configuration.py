@@ -260,6 +260,16 @@ def test_notifications_load_two_destinations_without_retaining_secrets() -> None
     assert len(a["hash_notifications"](config)) == 64
 
 
+def test_notifications_loader_accepts_native_discord_adapter() -> None:
+    a = api()
+    text = NOTIFICATIONS.replace("adapter: generic_webhook", "adapter: discord_webhook", 1)
+
+    config = a["load_notifications_text"](text, **notification_kwargs())
+
+    assert config.destinations["discord_1"].adapter == "discord_webhook"
+    assert config.destinations["discord_2"].adapter == "generic_webhook"
+
+
 @pytest.mark.parametrize(
     "old,new",
     [

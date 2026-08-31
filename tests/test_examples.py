@@ -48,10 +48,22 @@ def test_checked_in_examples_cross_real_loader_boundaries() -> None:
 
     notifications = load_notifications(
         ROOT / "config/notifications.yaml",
-        environ={"DISCORD_1_WEBHOOK_URL": "https://endpoint.invalid/one"},
-        secret_files={"/run/secrets/discord_2_webhook_url": "https://endpoint.invalid/two"},
+        secret_files={"/run/secrets/discord_webhook_url": "https://endpoint.invalid/hook"},
     )
-    assert tuple(notifications.destinations) == ("discord_1", "discord_2")
+    assert tuple(notifications.destinations) == ("discord_debug",)
+    destination = notifications.destinations["discord_debug"]
+    assert destination.adapter == "discord_webhook"
+    assert destination.enabled is True
+    assert destination.enabled_events == (
+        "run_started",
+        "run_succeeded",
+        "run_failed",
+        "decision_found",
+        "no_decision",
+    )
+    assert destination.endpoint.kind == "file"
+    assert destination.endpoint.name == "/run/secrets/discord_webhook_url"
+    assert destination.batching.maximum_events == 10
 
     assert (
         load_strategy(ROOT / "strategies/source-aligned-research.yaml").name
@@ -69,5 +81,13 @@ def test_examples_contain_references_but_no_literal_endpoint_or_secret() -> None
     assert "https://" not in content
     assert "http://" not in content
     assert "endpoint.invalid" not in content
-    assert "DISCORD_1_WEBHOOK_URL" in content
-    assert "/run/secrets/discord_2_webhook_url" in content
+    assert "DISCORD_1_WEBHOOK_URL" not in content
+    assert "/run/secrets/discord_webhook_url" in content
+
+
+def test_compose_mounts_only_the_checked_in_discord_secret() -> None:
+    compose = (ROOT / "compose.yaml").read_text(encoding="utf-8")
+
+    assert "DISCORD_1_WEBHOOK_URL" not in compose
+    assert compose.count("discord_webhook_url") == 3
+    assert "file: ./secrets/discord_webhook_url" in compose

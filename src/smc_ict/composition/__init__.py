@@ -10,6 +10,7 @@ from .registries import (
     foundation_composition_root,
     indicator_composition_root,
     market_data_composition_root,
+    notification_composition_root,
 )
 
 __all__ = [
@@ -22,4 +23,5 @@ __all__ = [
     "foundation_composition_root",
     "indicator_composition_root",
     "market_data_composition_root",
+    "notification_composition_root",
 ]

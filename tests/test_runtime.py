@@ -73,6 +73,95 @@ def test_run_once_wires_sqlite_dedup_and_reports_final_flush_failure(
     assert receipt.error == "NOTIFICATION_WARNING: final_flush"
 
 
+def test_run_once_selects_notification_adapter_from_closed_registry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from smc_ict.application.notifications import RoutingReceipt
+    from smc_ict.application.runtime import RunReceipt
+    from smc_ict.composition import runtime_services
+    from smc_ict.configuration.models import (
+        BatchingConfig,
+        DeduplicationConfig,
+        NotificationConfig,
+        NotificationDestination,
+        RedactionConfig,
+        RetryConfig,
+        SecretRef,
+        frozen_mapping,
+    )
+
+    destination = NotificationDestination(
+        "discord_webhook",
+        True,
+        ("run_started",),
+        SecretRef("env", "FICTIONAL_DISCORD_HOOK"),
+        1,
+        RetryConfig(1, ()),
+        DeduplicationConfig(1, ("event_type", "run_id")),
+        BatchingConfig(1, 1),
+        RedactionConfig((), ()),
+        "warning",
+    )
+    config = NotificationConfig(True, frozen_mapping({"discord_debug": destination}))
+    built: list[type[object]] = []
+
+    class Adapter:
+        adapter_id = "discord_webhook"
+
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            built.append(type(self))
+
+        def deliver(self, _event: object) -> object:
+            raise AssertionError("adapter construction is the behavior under test")
+
+    class Registry:
+        def resolve(self, adapter_id: str) -> type[Adapter]:
+            assert adapter_id == "discord_webhook"
+            return Adapter
+
+    class Root:
+        notifiers = Registry()
+
+    class Router:
+        def __init__(self, _config: object, *, adapter_factory: object, **_kwargs: object) -> None:
+            factory = cast(Any, adapter_factory)
+            factory("discord_debug", destination)
+
+        def deliver(self, _event: object) -> RoutingReceipt:
+            return RoutingReceipt("ALL_SUCCESS", ())
+
+        def deliver_all(self, _events: object) -> RoutingReceipt:
+            return RoutingReceipt("ALL_SUCCESS", ())
+
+        def close(self) -> RoutingReceipt:
+            return RoutingReceipt("ALL_SUCCESS", ())
+
+    class Runner:
+        _config_loader: object
+        _event_sink: object
+        _event_batch_sink: object
+
+        def run(self, _request: object) -> RunReceipt:
+            return RunReceipt("run", "SUCCEEDED", "manual", 1, 2, 1, 0, None)
+
+    monkeypatch.setattr(runtime_services, "notification_composition_root", lambda: Root())
+    monkeypatch.setattr(runtime_services, "NotificationRouter", Router)
+    monkeypatch.setattr(runtime_services, "load_notifications", lambda _path: config)
+    monkeypatch.setattr(runtime_services, "build_engine_runner", lambda *_args: Runner())
+
+    receipt = runtime_services.run_once(
+        strategy="strategy.yaml",
+        market_data="market.yaml",
+        notifications="notifications.yaml",
+        database=tmp_path / "runtime.sqlite3",
+        lock_path=tmp_path / "engine.lock",
+        trigger="manual",
+    )
+
+    assert receipt.status == "SUCCEEDED"
+    assert built == [Adapter]
+
+
 def test_manual_and_scheduled_runs_share_one_deterministic_engine_path(tmp_path: Path) -> None:
     from smc_ict.adapters.persistence.sqlite import SQLiteRepository
     from smc_ict.application.graph import ConfiguredNode
@@ -231,6 +320,25 @@ def test_manual_and_scheduled_runs_share_one_deterministic_engine_path(tmp_path:
         "no_decision",
         "run_succeeded",
     ]
+    assert dict(manual_events[0].payload) == {
+        "status": "RUNNING",
+        "instrument_count": 1,
+        "evaluation_time_ms": 299_999,
+    }
+    assert dict(manual_events[1].payload) == {
+        "status": "UNAVAILABLE",
+        "evaluation_time_ms": 299_999,
+        "closed_bar_time_ms": 299_999,
+        "decision_id": dict(manual_repository.load_decisions(cast(str, manual.run_id))[0].payload)[
+            "decision_hash"
+        ],
+        "first_failed_signal": "decision.levels",
+    }
+    assert dict(manual_events[2].payload) == {
+        "status": "SUCCEEDED",
+        "instrument_count": 1,
+        "decision_count": 1,
+    }
     assert manual_repository.load_run(manual.run_id).status == "SUCCEEDED"
     assert scheduled_repository.load_decisions(scheduled.run_id)[0].decision_status == "UNAVAILABLE"
 
@@ -262,6 +370,87 @@ def test_process_lock_rejects_a_competing_process_and_releases_after_process_dea
 
     with ProcessLock(lock_path) as recovered:
         assert recovered.acquired is True
+
+
+def test_ready_decision_notification_payload_contains_bounded_debug_evidence() -> None:
+    from smc_ict.application.runtime import _decision_notification_payload
+    from smc_ict.domain import Decision, hash_decision
+
+    decision = Decision(
+        instrument_id="BTC-USDT-PERP",
+        status="READY",
+        direction="LONG",
+        entry_text="101.5",
+        stop_text="99.25",
+        target_text="106",
+        first_failed_signal=None,
+        payload={"observation_hashes": {"project.risk_levels": "a" * 64}},
+    )
+
+    payload = _decision_notification_payload(decision, evaluation_time_ms=900_000)
+
+    assert payload == {
+        "status": "READY",
+        "direction": "LONG",
+        "evaluation_time_ms": 900_000,
+        "closed_bar_time_ms": 900_000,
+        "entry": "101.5",
+        "stop": "99.25",
+        "target": "106",
+        "reward_risk": "2",
+        "decision_id": hash_decision(decision),
+    }
+
+
+@pytest.mark.parametrize(
+    ("stop", "target", "expected_ratio"),
+    [("100.5", "111.5", "10"), ("101.5", "106", "UNDEFINED")],
+)
+def test_ready_decision_notification_reward_risk_is_stable_and_non_crashing(
+    stop: str, target: str, expected_ratio: str
+) -> None:
+    from smc_ict.application.runtime import _decision_notification_payload
+    from smc_ict.domain import Decision
+
+    decision = Decision(
+        instrument_id="BTC-USDT-PERP",
+        status="READY",
+        direction="LONG",
+        entry_text="101.5",
+        stop_text=stop,
+        target_text=target,
+        first_failed_signal=None,
+        payload={"observation_hashes": {}},
+    )
+
+    payload = _decision_notification_payload(decision, evaluation_time_ms=900_000)
+
+    assert payload["reward_risk"] == expected_ratio
+
+
+@pytest.mark.parametrize("status", ["NO_TRADE", "UNAVAILABLE"])
+def test_no_decision_notification_payload_identifies_first_failed_signal(status: str) -> None:
+    from smc_ict.application.runtime import _decision_notification_payload
+    from smc_ict.domain import Decision, hash_decision
+
+    decision = Decision(
+        instrument_id="BTC-USDT-PERP",
+        status=status,
+        direction=None,
+        entry_text=None,
+        stop_text=None,
+        target_text=None,
+        first_failed_signal="ict.fair_value_gap",
+        payload={"observation_hashes": {}},
+    )
+
+    assert _decision_notification_payload(decision, evaluation_time_ms=900_000) == {
+        "status": status,
+        "evaluation_time_ms": 900_000,
+        "closed_bar_time_ms": 900_000,
+        "decision_id": hash_decision(decision),
+        "first_failed_signal": "ict.fair_value_gap",
+    }
 
 
 def test_restart_recovery_marks_interrupted_running_rows_failed(tmp_path: Path) -> None:

@@ -12,9 +12,9 @@ from pathlib import Path, PurePosixPath
 from threading import Lock
 from time import time_ns
 
-from smc_ict.adapters.notifications.generic_webhook import GenericWebhookNotifier
 from smc_ict.adapters.persistence.sqlite import SQLiteRepository
 from smc_ict.application.notifications import NotificationRouter
+from smc_ict.application.ports import Notifier
 from smc_ict.application.runtime import (
     EngineRunner,
     ProcessLock,
@@ -24,8 +24,9 @@ from smc_ict.application.runtime import (
 )
 from smc_ict.application.scheduler import InternalScheduler, RecoveryRepository, RetryPolicy
 from smc_ict.composition.registries import (
+    CompositionRoot,
     build_market_provider,
-    indicator_composition_root,
+    notification_composition_root,
 )
 from smc_ict.configuration import (
     DEFERRED_PLUGIN_IDS,
@@ -34,7 +35,7 @@ from smc_ict.configuration import (
     load_schedule,
     load_strategy,
 )
-from smc_ict.configuration.models import ScheduleJob
+from smc_ict.configuration.models import NotificationDestination, ScheduleJob
 
 
 def current_time_ms() -> int:
@@ -56,7 +57,7 @@ def current_git_commit() -> str:
 
 
 def build_engine_runner(database: str | Path, lock_path: str | Path) -> EngineRunner:
-    root = indicator_composition_root()
+    root = notification_composition_root()
     plugin_factories = {
         plugin_id: root.plugins.resolve(plugin_id) for plugin_id in DEFERRED_PLUGIN_IDS
     }
@@ -68,6 +69,21 @@ def build_engine_runner(database: str | Path, lock_path: str | Path) -> EngineRu
         clock_ms=current_time_ms,
         git_commit=current_git_commit(),
     )
+
+
+def _build_notification_adapter(
+    root: CompositionRoot,
+    destination_id: str,
+    destination: NotificationDestination,
+) -> Notifier:
+    candidate = root.notifiers.resolve(destination.adapter)(
+        destination_id,
+        destination,
+        clock_seconds=lambda: current_time_ms() // 1000,
+    )
+    if not isinstance(candidate, Notifier):
+        raise TypeError("registered notifier does not implement Notifier")
+    return candidate
 
 
 def run_once(
@@ -84,13 +100,14 @@ def run_once(
         notification_config = (
             load_notifications(notifications) if notifications is not None else None
         )
+        root = notification_composition_root()
         router = (
             None
             if notification_config is None
             else NotificationRouter(
                 notification_config,
-                adapter_factory=lambda destination_id, destination: GenericWebhookNotifier(
-                    destination_id, destination, clock_seconds=lambda: current_time_ms() // 1000
+                adapter_factory=lambda destination_id, destination: _build_notification_adapter(
+                    root, destination_id, destination
                 ),
                 clock_seconds=lambda: current_time_ms() // 1000,
                 deduplication_store=SQLiteRepository(database),

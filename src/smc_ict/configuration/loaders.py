@@ -33,6 +33,7 @@ PROVIDERS = frozenset({"binance_usdm", "okx_swap"})
 MARKET_TYPE = "LINEAR_PERPETUAL"
 TIMEFRAMES = frozenset(Timeframe.allowed_values())
 EVENTS = frozenset({"run_started", "run_succeeded", "run_failed", "decision_found", "no_decision"})
+NOTIFICATION_ADAPTERS = frozenset({"discord_webhook", "generic_webhook"})
 DEDUPE_KEYS = frozenset({"event_type", "run_id", "instrument_id", "strategy_id"})
 HEADERS = frozenset({"authorization", "cookie", "set-cookie", "proxy-authorization"})
 QUERY_PARAMETERS = frozenset({"token", "key", "signature", "secret"})
@@ -356,8 +357,11 @@ def _notification_destination(
     }
     raw = exact_dict(value, field, keys)
     adapter = exact_str(raw["adapter"], f"{field}.adapter")
-    if adapter != "generic_webhook":
-        fail(f"{field}.adapter", "unknown adapter; allowed value is generic_webhook")
+    if adapter not in NOTIFICATION_ADAPTERS:
+        fail(
+            f"{field}.adapter",
+            f"unknown adapter; allowed values are {sorted(NOTIFICATION_ADAPTERS)}",
+        )
     enabled = exact_bool(raw["enabled"], f"{field}.enabled")
     events = unique_strings(
         raw["enabled_events"], f"{field}.enabled_events", EVENTS, empty=not enabled
