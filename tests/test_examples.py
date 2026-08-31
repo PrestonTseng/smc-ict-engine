@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 from smc_ict.configuration import (
@@ -91,3 +92,18 @@ def test_compose_mounts_only_the_checked_in_discord_secret() -> None:
     assert "DISCORD_1_WEBHOOK_URL" not in compose
     assert compose.count("discord_webhook_url") == 3
     assert "file: ./secrets/discord_webhook_url" in compose
+
+
+def test_notification_config_rejection_validator_matches_the_checked_in_example() -> None:
+    result = subprocess.run(
+        ["uv", "run", "python", "scripts/verify_notification_config.py"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "PASS real loader notification example: destinations=1" in result.stdout
+    assert "adapter=discord_webhook" in result.stdout

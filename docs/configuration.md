@@ -12,6 +12,10 @@ Use these authorities:
 
 Keep instrument IDs aligned between the strategy and market-data files. Use one market-data file for each run.
 
-Do not put resolved webhook URLs in YAML. Set `DISCORD_1_WEBHOOK_URL` in the environment. Put the second URL in `secrets/discord_2_webhook_url`.
+Do not put a resolved webhook endpoint in YAML or `.env`. The one active `discord_debug`
+destination reads `/run/secrets/discord_webhook_url`; Compose mounts that value from the ignored
+host file `secrets/discord_webhook_url`. The destination subscribes to all five neutral engine
+events and uses the native `discord_webhook` adapter.
 
-Copy `.env.example` to a local ignored `.env` only when your Compose workflow loads that file. Do not commit the resolved values.
+Copy `.env.example` to a local ignored `.env` only when your Compose workflow loads that file. It
+contains only the immutable image revision variable. Do not commit resolved values.
