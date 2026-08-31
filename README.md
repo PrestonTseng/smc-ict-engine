@@ -49,7 +49,7 @@ docker compose exec engine smc-ict database status --database /data/smc_ict.db
 docker compose logs --follow engine
 ```
 
-The Compose health command reads the scheduler readiness marker at `/data/scheduler.ready` and confirms that its process is alive. `READY` means that the scheduler validated every referenced configuration file and completed restart recovery. It does not mean that a deferred strategy can produce a decision.
+The Compose health command reads the scheduler readiness marker at `/data/scheduler.ready` and confirms that its process is alive. `READY` means that the scheduler validated every referenced configuration file and completed restart recovery. It does not mean that the configured gates passed or that a research decision is available.
 
 Stop the scheduler without killing its process:
 
@@ -107,7 +107,7 @@ uv run smc-ict run \
   --trigger manual
 ```
 
-The checked-in source-aligned strategy fails closed because approved conformance vectors are not available. A `FAILED` receipt is the expected safe result. Do not weaken this boundary.
+The checked-in source-aligned strategy executes seven Python plugins over completed candles. Warm-up gaps produce `UNAVAILABLE`; fully evaluable gates that are not satisfied produce `NO_TRADE`. A `READY` result remains research evidence, not an order instruction.
 
 Start the scheduler outside Compose only for local diagnosis:
 
@@ -125,7 +125,7 @@ A strategy YAML file owns its name, version, instruments, history, roles, signal
 
 Give each role one completed-candle timeframe. Make every dependency explicit. Give each signal instance a unique ID and increasing order. A required failed gate produces `NO_TRADE`. Missing required evidence produces `UNAVAILABLE`.
 
-See `docs/strategy-examples.md` for role and dependency guidance. Source-aligned plugins remain deferred until pinned expected-output vectors and an independent conforming implementation exist.
+See `docs/strategy-examples.md` for role and dependency guidance. The seven checked-in registrations have fixed role, timeframe, and dependency contracts; the strict loader rejects mismatches before execution.
 
 ## Notification destinations
 
@@ -174,7 +174,7 @@ docker compose restart engine
 
 `provenance/sources.yaml` records source metadata and hashes. `LICENSES/README.md` records the unresolved repository license gate. No Pine source is vendored in this repository.
 
-Source-derived indicator work remains deferred. This project makes no formula-equivalence, profitability, commercial-license, or performance claim.
+The six source-derived registrations are original Python closed-bar translations of the pinned source revisions; the seventh is strategy-owned risk composition. This project makes no TradingView-execution-equivalence, profitability, commercial-license, or performance claim.
 
 `docs/deployment-design.html` is a durable local deployment design reference. It contains no agent-local path and no source code from external indicators.
 

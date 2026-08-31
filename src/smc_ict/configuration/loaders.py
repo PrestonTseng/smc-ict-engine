@@ -9,7 +9,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path, PurePosixPath
 from typing import Never
 
-from .errors import DeferredPluginError, StrictConfigurationError
+from .errors import StrictConfigurationError
 from .models import (
     BatchingConfig,
     DeduplicationConfig,
@@ -42,7 +42,7 @@ ENV_RE = re.compile(r"[A-Z][A-Z0-9_]{0,127}\Z")
 SECRET_FILE_RE = re.compile(r"/run/secrets/[A-Za-z0-9_.-]{1,128}\Z")
 DECIMAL_RE = re.compile(r"(0|[1-9][0-9]*)(\.[0-9]+)?\Z")
 SIGNAL_FIELDS = frozenset({"id", "role", "depends_on", "parameters", "required", "effect", "order"})
-DEFERRED_PLUGIN_IDS = (
+IMPLEMENTED_PLUGIN_IDS = (
     "smc.swing_structure",
     "smc.equal_high_low",
     "smc.order_block",
@@ -51,6 +51,21 @@ DEFERRED_PLUGIN_IDS = (
     "ict.fair_value_gap",
     "project.risk_levels",
 )
+# Backwards-compatible export retained for callers compiled against the foundation release.
+DEFERRED_PLUGIN_IDS = IMPLEMENTED_PLUGIN_IDS
+PLUGIN_CONTRACTS = {
+    "smc.swing_structure": ("regime", "4h", ()),
+    "smc.equal_high_low": ("context", "1h", ("smc.swing_structure",)),
+    "smc.order_block": ("context", "1h", ("smc.swing_structure",)),
+    "ict.clustered_liquidity": ("execution", "5m", ("smc.equal_high_low",)),
+    "ict.market_structure": ("execution", "5m", ("ict.clustered_liquidity",)),
+    "ict.fair_value_gap": ("execution", "5m", ("ict.market_structure",)),
+    "project.risk_levels": (
+        "execution",
+        "5m",
+        ("ict.clustered_liquidity", "ict.fair_value_gap"),
+    ),
+}
 
 
 def fail(field: str, message: str) -> Never:
@@ -142,6 +157,14 @@ def canonical_decimal(
     if "." in normalized:
         normalized = normalized.rstrip("0").rstrip(".")
     return normalized or "0"
+
+
+def ict_margin_fraction(value: object, field: str) -> str:
+    result = canonical_decimal(value, field)
+    allowed = {Decimal(number) / Decimal(10) for number in range(2, 8)}
+    if Decimal(result) not in allowed:
+        fail(field, "expected a source-representable tenth from 0.2 through 0.7")
+    return result
 
 
 def _root(text: str, authority: str) -> dict[str, CanonicalValue]:
@@ -468,10 +491,10 @@ def _signal_parameters(
     elif plugin_id == "ict.clustered_liquidity":
         raw = exact_dict(raw, field, {"pivot_width", "minimum_pivots", "margin_atr_fraction"})
         result = {
-            "pivot_width": bounded_int(raw["pivot_width"], f"{field}.pivot_width", 1, 10),
+            "pivot_width": bounded_int(raw["pivot_width"], f"{field}.pivot_width", 3, 10),
             "minimum_pivots": bounded_int(raw["minimum_pivots"], f"{field}.minimum_pivots", 3, 50),
-            "margin_atr_fraction": canonical_decimal(
-                raw["margin_atr_fraction"], f"{field}.margin_atr_fraction", maximum="1"
+            "margin_atr_fraction": ict_margin_fraction(
+                raw["margin_atr_fraction"], f"{field}.margin_atr_fraction"
             ),
         }
     elif plugin_id == "ict.market_structure":
@@ -481,7 +504,7 @@ def _signal_parameters(
         if not emit_mss and not emit_bos:
             fail(field, "at least one structure event must be enabled")
         result = {
-            "pivot_width": bounded_int(raw["pivot_width"], f"{field}.pivot_width", 1, 10),
+            "pivot_width": bounded_int(raw["pivot_width"], f"{field}.pivot_width", 3, 10),
             "emit_mss": emit_mss,
             "emit_bos": emit_bos,
         }
@@ -557,7 +580,7 @@ def load_strategy_text(text: str, *, allow_deferred: bool = False) -> StrategyCo
         field = f"strategy.signals[{index}]"
         signal = exact_dict(value, field, SIGNAL_FIELDS)
         plugin_id = exact_str(signal["id"], f"{field}.id")
-        if plugin_id not in DEFERRED_PLUGIN_IDS or plugin_id in seen_ids:
+        if plugin_id not in IMPLEMENTED_PLUGIN_IDS or plugin_id in seen_ids:
             fail(f"{field}.id", "unknown or duplicate plugin ID")
         role = exact_str(signal["role"], f"{field}.role")
         if role not in roles:
@@ -565,6 +588,19 @@ def load_strategy_text(text: str, *, allow_deferred: bool = False) -> StrategyCo
         dependencies = unique_strings(signal["depends_on"], f"{field}.depends_on", empty=True)
         if any(dependency not in seen_ids for dependency in dependencies):
             fail(f"{field}.depends_on", "dependencies must name earlier configured signals")
+        expected_role, expected_timeframe, expected_dependencies = PLUGIN_CONTRACTS[plugin_id]
+        if role != expected_role:
+            fail(f"{field}.role", f"configured role must be {expected_role}")
+        if roles[role] != expected_timeframe:
+            fail(
+                f"strategy.roles.{role}",
+                f"configured timeframe must be {expected_timeframe}",
+            )
+        if dependencies != expected_dependencies:
+            fail(
+                f"{field}.depends_on",
+                f"configured dependencies must be {list(expected_dependencies)}",
+            )
         order = bounded_int(signal["order"], f"{field}.order", 0, 2**31 - 1)
         if order <= previous_order:
             fail(f"{field}.order", "orders must be strictly increasing")
@@ -592,8 +628,6 @@ def load_strategy_text(text: str, *, allow_deferred: bool = False) -> StrategyCo
         frozen_mapping(roles),
         tuple(signals),
     )
-    if not allow_deferred:
-        raise DeferredPluginError(tuple(signal.id for signal in config.signals))
     return config
 
 

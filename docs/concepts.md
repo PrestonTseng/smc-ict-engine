@@ -10,4 +10,4 @@ Each strategy defines a directed acyclic graph (DAG). A graph node uses one conf
 
 A successful run commits candles, observations, decisions, and the run receipt in SQLite. Notification delivery occurs after this commit. A notification error cannot change committed research evidence.
 
-Source-derived formulas remain deferred. A `DEFERRED_PLUGIN` error is a safety result, not a trading signal.
+The production composition root registers exactly seven Python plugins. Six are closed-bar translations tied to pinned first-party source revisions; `project.risk_levels` is deterministic strategy-owned composition. No Pine runtime, chart object, or provider-specific branch participates in evaluation.

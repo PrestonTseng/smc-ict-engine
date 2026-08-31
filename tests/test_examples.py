@@ -2,11 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from smc_ict.configuration import (
-    DEFERRED_PLUGIN_IDS,
-    DeferredPluginError,
     load_market_data,
     load_notifications,
     load_schedule,
@@ -31,11 +27,8 @@ def test_checked_in_examples_cross_real_loader_boundaries() -> None:
     )
     assert tuple(notifications.destinations) == ("discord_1", "discord_2")
 
-    with pytest.raises(DeferredPluginError) as caught:
-        load_strategy(ROOT / "strategies/source-aligned-research.yaml")
-    assert caught.value.plugin_ids == DEFERRED_PLUGIN_IDS
     assert (
-        load_strategy(ROOT / "strategies/source-aligned-research.yaml", allow_deferred=True).name
+        load_strategy(ROOT / "strategies/source-aligned-research.yaml").name
         == "source-aligned-research"
     )
 

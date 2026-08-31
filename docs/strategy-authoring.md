@@ -16,4 +16,6 @@ uv run smc-ict validate \
   --notifications config/notifications.yaml
 ```
 
-The checked-in source-aligned strategy returns `DEFERRED_PLUGIN`. Do not remove this gate. Promotion requires pinned expected-output vectors and an independent implementation.
+The checked-in source-aligned strategy resolves exactly seven implemented registrations. Its role, timeframe, and dependency edges are fixed contracts; validation rejects a mismatch before any market-data request or database write.
+
+The active ICT registrations use the pinned source defaults: configurable left pivot width 5 (allowed exact integers 3–10), fixed non-configurable right confirmation width 1, and liquidity margin ATR fraction 0.4 (allowed exact tenths 0.2–0.7, representing source margin input 2–7 divided by 10).

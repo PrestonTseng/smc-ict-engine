@@ -42,9 +42,9 @@ signals:
     role: execution
     depends_on: [smc.equal_high_low]
     parameters:
-      pivot_width: 1
+      pivot_width: 5
       minimum_pivots: 3
-      margin_atr_fraction: "0.1"
+      margin_atr_fraction: "0.4"
     required: true
     effect: REJECT
     order: 40
@@ -52,7 +52,7 @@ signals:
     role: execution
     depends_on: [ict.clustered_liquidity]
     parameters:
-      pivot_width: 1
+      pivot_width: 5
       emit_mss: true
       emit_bos: true
     required: true

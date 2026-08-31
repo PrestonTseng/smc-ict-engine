@@ -262,12 +262,12 @@ def test_readme_documents_the_operator_workflows_and_safety_boundaries() -> None
 def test_required_operator_document_set_is_present_and_cross_linked() -> None:
     required = {
         "concepts.md": "research-only",
-        "strategy-authoring.md": "DEFERRED_PLUGIN",
+        "strategy-authoring.md": "seven implemented registrations",
         "configuration.md": "config/notifications.yaml",
         "operations.md": "docker compose stop --timeout 30 engine",
         "troubleshooting.md": "PROCESS_RESTART",
         "architecture.md": "five tables",
-        "formula-provenance.md": "pinned expected-output vectors",
+        "formula-provenance.md": "active source locators",
     }
     for filename, boundary in required.items():
         document = ROOT.joinpath("docs", filename).read_text(encoding="utf-8")
