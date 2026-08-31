@@ -7,7 +7,7 @@ history_minutes: 129600
 roles:
   regime: 4h
   context: 1h
-  execution: 5m
+  execution: 15m
 signals:
   - id: smc.swing_structure
     role: regime

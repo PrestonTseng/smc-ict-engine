@@ -12,8 +12,34 @@ from smc_ict.configuration import (
 ROOT = Path(__file__).parents[1]
 
 
+def test_active_market_config_selects_okx_swap_and_keeps_binance_as_an_alternate() -> None:
+    from smc_ict.adapters.market_data.binance_usdm import BinanceUsdmProvider
+    from smc_ict.adapters.market_data.okx_swap import OkxSwapProvider
+    from smc_ict.composition import build_market_provider, market_data_composition_root
+
+    root = market_data_composition_root()
+    active = load_market_data(ROOT / "config/market-data.yaml")
+    alternate = load_market_data(ROOT / "config/market-data.binance-usdm.yaml")
+
+    assert active.canonical_dict() == {
+        "provider": "okx_swap",
+        "market_type": "LINEAR_PERPETUAL",
+        "instruments": {
+            "BTC-USDT-PERP": "BTC-USDT-SWAP",
+            "ETH-USDT-PERP": "ETH-USDT-SWAP",
+        },
+    }
+    assert alternate.canonical_dict() == {
+        "provider": "binance_usdm",
+        "market_type": "LINEAR_PERPETUAL",
+        "instruments": {"BTC-USDT-PERP": "BTCUSDT", "ETH-USDT-PERP": "ETHUSDT"},
+    }
+    assert isinstance(build_market_provider(active, root), OkxSwapProvider)
+    assert isinstance(build_market_provider(alternate, root), BinanceUsdmProvider)
+
+
 def test_checked_in_examples_cross_real_loader_boundaries() -> None:
-    assert load_market_data(ROOT / "config/market-data.yaml").provider == "binance_usdm"
+    assert load_market_data(ROOT / "config/market-data.yaml").provider == "okx_swap"
     assert (
         load_market_data(ROOT / "config/market-data.binance-usdm.yaml").provider == "binance_usdm"
     )

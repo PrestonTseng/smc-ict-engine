@@ -8,6 +8,8 @@ Give each timeframe a logical role. A `context` role can describe the broad mark
 
 Every role receives completed bars only. A configured plugin can read its role's bars and the observations from its declared dependencies. It cannot read another plugin's hidden state. The graph stops invalid configuration before market or database access.
 
+The checked-in research strategy currently assigns swing structure to `4h`, equal-high/low and order-block context to `1h`, and the ordered liquidity, market-structure, fair-value-gap, and risk-level chain to `15m`. This composition is a logical approximation of prior operator intent, not an equivalence claim about any old project or execution flow.
+
 A human author can arrange a graph like this:
 
 1. A context observation has no dependency.

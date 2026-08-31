@@ -486,26 +486,98 @@ def test_strategy_configuration_wires_graph_and_decision_order_without_source_br
     )
 
 
-def test_seven_node_graph_replay_is_byte_deterministic_end_to_end() -> None:
-    import json
-
-    from smc_ict.application.decision_policy import (
-        OrderedDecisionPlugin,
-        configured_decision_signals,
-    )
+def test_active_strategy_has_exact_multitimeframe_composition_and_runs_all_factories() -> None:
     from smc_ict.application.graph import IndicatorGraph, RunContext, configured_nodes
     from smc_ict.application.resampling import DerivedCandle
     from smc_ict.composition import indicator_composition_root
     from smc_ict.configuration import load_strategy
-    from smc_ict.domain import hash_decision, hash_observation
+    from smc_ict.domain import Timeframe, hash_observation
 
     strategy = load_strategy(Path(__file__).parents[1] / "strategies/source-aligned-research.yaml")
-    root = indicator_composition_root()
-    factories = {plugin_id: root.plugins.resolve(plugin_id) for plugin_id in root.plugins.ids}
-    graph = IndicatorGraph(nodes=configured_nodes(strategy), factories=factories)  # type: ignore[arg-type]
+    assert strategy.history_minutes == 90 * 24 * 60
+    assert dict(strategy.roles) == {"regime": "4h", "context": "1h", "execution": "15m"}
+    assert tuple(signal.canonical_dict() for signal in strategy.signals) == (
+        {
+            "id": "smc.swing_structure",
+            "role": "regime",
+            "depends_on": [],
+            "parameters": {"swing_length": 50, "show_labels": True},
+            "required": True,
+            "effect": "REJECT",
+            "order": 10,
+        },
+        {
+            "id": "smc.equal_high_low",
+            "role": "context",
+            "depends_on": ["smc.swing_structure"],
+            "parameters": {"confirmation_bars": 3, "threshold_atr_fraction": "0.1"},
+            "required": True,
+            "effect": "REJECT",
+            "order": 20,
+        },
+        {
+            "id": "smc.order_block",
+            "role": "context",
+            "depends_on": ["smc.swing_structure"],
+            "parameters": {
+                "scope": "swing",
+                "volatility_filter": "atr",
+                "mitigation_source": "close",
+                "maximum_blocks": 5,
+            },
+            "required": True,
+            "effect": "REJECT",
+            "order": 30,
+        },
+        {
+            "id": "ict.clustered_liquidity",
+            "role": "execution",
+            "depends_on": ["smc.equal_high_low"],
+            "parameters": {
+                "pivot_width": 5,
+                "minimum_pivots": 3,
+                "margin_atr_fraction": "0.4",
+            },
+            "required": True,
+            "effect": "REJECT",
+            "order": 40,
+        },
+        {
+            "id": "ict.market_structure",
+            "role": "execution",
+            "depends_on": ["ict.clustered_liquidity"],
+            "parameters": {"pivot_width": 5, "emit_mss": True, "emit_bos": True},
+            "required": True,
+            "effect": "REJECT",
+            "order": 50,
+        },
+        {
+            "id": "ict.fair_value_gap",
+            "role": "execution",
+            "depends_on": ["ict.market_structure"],
+            "parameters": {
+                "kind": "ordinary",
+                "require_displacement": True,
+                "displacement_length": 20,
+                "mitigation": "full_traversal",
+            },
+            "required": True,
+            "effect": "REJECT",
+            "order": 60,
+        },
+        {
+            "id": "project.risk_levels",
+            "role": "execution",
+            "depends_on": ["ict.clustered_liquidity", "ict.fair_value_gap"],
+            "parameters": {"minimum_reward_risk": "2"},
+            "required": True,
+            "effect": "LEVELS",
+            "order": 70,
+        },
+    )
 
     def role_candles(interval: str, count: int) -> tuple[DerivedCandle, ...]:
-        duration = {"5m": 300_000, "1h": 3_600_000, "4h": 14_400_000}[interval]
+        duration = Timeframe(interval).duration_minutes * 60_000
         return tuple(
             DerivedCandle(
                 "BTC-USDT-PERP",
@@ -525,9 +597,80 @@ def test_seven_node_graph_replay_is_byte_deterministic_end_to_end() -> None:
     roles = {
         "regime": role_candles("4h", 60),
         "context": role_candles("1h", 220),
-        "execution": role_candles("5m", 30),
+        "execution": role_candles("15m", 30),
     }
-    context = RunContext("BTC-USDT-PERP", roles["regime"][-1].close_time_ms, roles)
+    root = indicator_composition_root()
+    factories = {plugin_id: root.plugins.resolve(plugin_id) for plugin_id in root.plugins.ids}
+    graph = IndicatorGraph(  # type: ignore[arg-type]
+        nodes=configured_nodes(strategy), factories=factories
+    )
+    context = RunContext(
+        "BTC-USDT-PERP",
+        roles["regime"][-1].close_time_ms,
+        roles,
+        strategy.roles,
+    )
+
+    first = graph.execute(context)
+    second = graph.execute(context)
+
+    assert tuple(first) == tuple(signal.id for signal in strategy.signals)
+    assert tuple(item.timeframe for item in first.values()) == (
+        "4h",
+        "1h",
+        "1h",
+        "15m",
+        "15m",
+        "15m",
+        "15m",
+    )
+    assert tuple(map(hash_observation, first.values())) == tuple(
+        map(hash_observation, second.values())
+    )
+
+
+def test_seven_node_graph_replay_is_byte_deterministic_end_to_end() -> None:
+    import json
+
+    from smc_ict.application.decision_policy import (
+        OrderedDecisionPlugin,
+        configured_decision_signals,
+    )
+    from smc_ict.application.graph import IndicatorGraph, RunContext, configured_nodes
+    from smc_ict.application.resampling import DerivedCandle
+    from smc_ict.composition import indicator_composition_root
+    from smc_ict.configuration import load_strategy
+    from smc_ict.domain import Timeframe, hash_decision, hash_observation
+
+    strategy = load_strategy(Path(__file__).parents[1] / "strategies/source-aligned-research.yaml")
+    root = indicator_composition_root()
+    factories = {plugin_id: root.plugins.resolve(plugin_id) for plugin_id in root.plugins.ids}
+    graph = IndicatorGraph(nodes=configured_nodes(strategy), factories=factories)  # type: ignore[arg-type]
+
+    def role_candles(interval: str, count: int) -> tuple[DerivedCandle, ...]:
+        duration = Timeframe(interval).duration_minutes * 60_000
+        return tuple(
+            DerivedCandle(
+                "BTC-USDT-PERP",
+                interval,
+                index * duration,
+                (index + 1) * duration - 1,
+                "100",
+                "101",
+                "99",
+                "100",
+                "1",
+                "1",
+            )
+            for index in range(count)
+        )
+
+    roles = {
+        "regime": role_candles(strategy.roles["regime"], 60),
+        "context": role_candles(strategy.roles["context"], 220),
+        "execution": role_candles(strategy.roles["execution"], 30),
+    }
+    context = RunContext("BTC-USDT-PERP", roles["regime"][-1].close_time_ms, roles, strategy.roles)
     policy = OrderedDecisionPlugin(configured_decision_signals(strategy))
 
     first = graph.execute(context)

@@ -75,7 +75,7 @@ uv run smc-ict validate \
 
 Validation checks YAML structure, types, provider IDs, schedule policy, notification references, and strategy dependencies. It does not resolve a notification endpoint. Endpoint resolution occurs only at the generic HTTPS webhook adapter boundary.
 
-`config/market-data.yaml` selects Binance USD-M. Use `config/market-data.okx-swap.yaml` to select OKX swap. Keep the configured instrument IDs aligned with the selected provider symbols. Use one market-data file per run.
+`config/market-data.yaml` selects OKX swap. `config/market-data.binance-usdm.yaml` remains an inactive Binance USD-M alternate. Keep the configured instrument IDs aligned with the selected provider symbols. Use one market-data file per run.
 
 Bootstrap or inspect a local database:
 

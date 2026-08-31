@@ -5,8 +5,8 @@ The engine loads strict YAML. Unknown keys, duplicate keys, wrong types, unknown
 Use these authorities:
 
 - `strategies/source-aligned-research.yaml` defines the strategy DAG.
-- `config/market-data.yaml` selects Binance USD-M.
-- `config/market-data.okx-swap.yaml` selects OKX swap.
+- `config/market-data.yaml` actively selects OKX swap.
+- `config/market-data.binance-usdm.yaml` is the inactive Binance USD-M alternate.
 - `config/schedule.yaml` defines UTC jobs.
 - `config/notifications.yaml` defines destination filters and secret references.
 

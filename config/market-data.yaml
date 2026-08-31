@@ -1,6 +1,6 @@
 market_data:
-  provider: binance_usdm
+  provider: okx_swap
   market_type: LINEAR_PERPETUAL
   instruments:
-    BTC-USDT-PERP: BTCUSDT
-    ETH-USDT-PERP: ETHUSDT
+    BTC-USDT-PERP: BTC-USDT-SWAP
+    ETH-USDT-PERP: ETH-USDT-SWAP
