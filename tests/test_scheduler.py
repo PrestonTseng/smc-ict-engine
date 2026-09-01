@@ -2,9 +2,41 @@ from __future__ import annotations
 
 import subprocess
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from threading import Event, Thread
 
 import pytest
+
+
+def test_active_schedule_fires_one_minute_after_each_completed_15m_boundary() -> None:
+    from apscheduler.triggers.cron import CronTrigger
+
+    from smc_ict.configuration import load_schedule
+
+    schedule = load_schedule(Path(__file__).parents[1] / "config/schedule.yaml")
+    job = schedule.jobs[0]
+
+    assert (schedule.timezone, job.cron) == ("UTC", "1,16,31,46 * * * *")
+    assert (job.misfire_policy, job.misfire_grace_seconds) == ("skip", 120)
+    assert job.overlap_policy == "skip"
+
+    trigger = CronTrigger.from_crontab(job.cron, timezone=UTC)
+    previous = None
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    fires = []
+    for _ in range(5):
+        fire = trigger.get_next_fire_time(previous, now)
+        assert fire is not None
+        fires.append(fire)
+        previous = now = fire
+
+    assert fires == [
+        datetime(2026, 1, 1, 0, 1, tzinfo=UTC),
+        datetime(2026, 1, 1, 0, 16, tzinfo=UTC),
+        datetime(2026, 1, 1, 0, 31, tzinfo=UTC),
+        datetime(2026, 1, 1, 0, 46, tzinfo=UTC),
+        datetime(2026, 1, 1, 1, 1, tzinfo=UTC),
+    ]
 
 
 def test_complete_scheduler_job_is_never_retried() -> None:

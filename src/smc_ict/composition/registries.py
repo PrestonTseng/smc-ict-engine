@@ -8,6 +8,7 @@ from types import MappingProxyType
 
 from smc_ict.adapters.market_data.binance_usdm import BinanceUsdmProvider
 from smc_ict.adapters.market_data.okx_swap import OkxSwapProvider
+from smc_ict.adapters.notifications import DiscordWebhookNotifier, GenericWebhookNotifier
 from smc_ict.adapters.persistence.sqlite import SQLiteRepository
 from smc_ict.application.ports import KlineProvider
 from smc_ict.configuration import IMPLEMENTED_PLUGIN_IDS
@@ -92,7 +93,10 @@ def foundation_composition_root() -> CompositionRoot:
             ),
         ),
         notifiers=ClosedRegistry(
-            "notifier", _unavailable(("generic_webhook",), "adapter implementation is deferred")
+            "notifier",
+            _unavailable(
+                ("discord_webhook", "generic_webhook"), "adapter implementation is deferred"
+            ),
         ),
         repositories=ClosedRegistry(
             "repository", _unavailable(("sqlite",), "repository implementation is deferred")
@@ -139,6 +143,24 @@ def indicator_composition_root() -> CompositionRoot:
             },
         ),
         notifiers=root.notifiers,
+        repositories=root.repositories,
+    )
+
+
+def notification_composition_root() -> CompositionRoot:
+    """Install notification adapters without platform branches in runtime core."""
+
+    root = indicator_composition_root()
+    return CompositionRoot(
+        providers=root.providers,
+        plugins=root.plugins,
+        notifiers=ClosedRegistry(
+            "notifier",
+            {
+                "discord_webhook": RegistryEntry(DiscordWebhookNotifier, None),
+                "generic_webhook": RegistryEntry(GenericWebhookNotifier, None),
+            },
+        ),
         repositories=root.repositories,
     )
 

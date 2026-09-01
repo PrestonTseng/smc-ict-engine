@@ -8,6 +8,7 @@ import logging
 from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
+from decimal import Decimal
 from hashlib import sha256
 from pathlib import Path
 from types import MappingProxyType
@@ -35,7 +36,7 @@ from smc_ict.configuration import (
     load_notifications,
     load_strategy,
 )
-from smc_ict.domain import ClosedCandle, Decision, Observation, hash_candles
+from smc_ict.domain import ClosedCandle, Decision, Observation, hash_candles, hash_decision
 
 LOGGER = logging.getLogger(__name__)
 
@@ -79,6 +80,37 @@ ProviderFactory = Callable[[MarketDataConfig], KlineProvider]
 EventSink = Callable[[NotificationEvent], object]
 EventBatchSink = Callable[[tuple[NotificationEvent, ...]], object]
 Clock = Callable[[], int]
+
+
+def _decision_notification_payload(
+    decision: Decision, *, evaluation_time_ms: int
+) -> dict[str, None | bool | int | str]:
+    payload: dict[str, None | bool | int | str] = {
+        "status": decision.status,
+        "evaluation_time_ms": evaluation_time_ms,
+        "closed_bar_time_ms": evaluation_time_ms,
+        "decision_id": hash_decision(decision),
+    }
+    if decision.status != "READY":
+        payload["first_failed_signal"] = decision.first_failed_signal
+        return payload
+    assert decision.entry_text is not None
+    assert decision.stop_text is not None
+    assert decision.target_text is not None
+    entry = Decimal(decision.entry_text)
+    risk = abs(entry - Decimal(decision.stop_text))
+    reward = abs(Decimal(decision.target_text) - entry)
+    ratio = "UNDEFINED" if risk == 0 else format((reward / risk).normalize(), "f")
+    payload.update(
+        {
+            "direction": decision.direction,
+            "entry": decision.entry_text,
+            "stop": decision.stop_text,
+            "target": decision.target_text,
+            "reward_risk": ratio,
+        }
+    )
+    return payload
 
 
 def load_runtime_configuration(request: RunRequest) -> RuntimeConfiguration:
@@ -218,7 +250,20 @@ class EngineRunner:
         self.repository.store_run(running)
         notification_warnings = list(
             self._emit_events(
-                (NotificationEvent("run_started", run_id, None, strategy.name, 1, {}),)
+                (
+                    NotificationEvent(
+                        "run_started",
+                        run_id,
+                        None,
+                        strategy.name,
+                        1,
+                        {
+                            "status": "RUNNING",
+                            "instrument_count": len(strategy.instruments),
+                            "evaluation_time_ms": latest_open + 59_999,
+                        },
+                    ),
+                )
             )
         )
 
@@ -233,7 +278,12 @@ class EngineRunner:
                 context = RunContext(
                     instrument_id,
                     latest_open + 59_999,
-                    resample_roles(by_instrument[instrument_id], strategy.roles),
+                    resample_roles(
+                        by_instrument[instrument_id],
+                        strategy.roles,
+                        evaluation_time_ms=latest_open + 59_999,
+                    ),
+                    strategy.roles,
                 )
                 instrument_observations = graph.execute(context)
                 observations.extend(instrument_observations.values())
@@ -249,7 +299,14 @@ class EngineRunner:
             completed = self._clock_ms()
             error = self._bounded_error(exc)
             self.repository.finish_run(run_id, "FAILED", completed_at_ms=completed, error=error)
-            self._emit_terminal(config, run_id, (), False, error)
+            self._emit_terminal(
+                config,
+                run_id,
+                (),
+                False,
+                error,
+                evaluation_time_ms=latest_open + 59_999,
+            )
             return RunReceipt(
                 run_id,
                 "FAILED",
@@ -262,7 +319,14 @@ class EngineRunner:
             )
 
         notification_warnings.extend(
-            self._emit_terminal(config, run_id, tuple(decisions), True, None)
+            self._emit_terminal(
+                config,
+                run_id,
+                tuple(decisions),
+                True,
+                None,
+                evaluation_time_ms=latest_open + 59_999,
+            )
         )
         warning = (
             None
@@ -287,6 +351,8 @@ class EngineRunner:
         decisions: tuple[Decision, ...],
         succeeded: bool,
         error: str | None,
+        *,
+        evaluation_time_ms: int,
     ) -> tuple[str, ...]:
         if self._event_sink is None:
             return ()
@@ -300,9 +366,16 @@ class EngineRunner:
                     decision.instrument_id,
                     config.strategy.name,
                     1,
-                    {"decision_status": decision.status},
+                    _decision_notification_payload(decision, evaluation_time_ms=evaluation_time_ms),
                 )
             )
+        lifecycle_payload: dict[str, None | bool | int | str] = {
+            "status": "SUCCEEDED" if succeeded else "FAILED",
+            "instrument_count": len(config.strategy.instruments),
+            "decision_count": len(decisions),
+        }
+        if error is not None:
+            lifecycle_payload["error_category"] = error.partition(":")[0][:64]
         events.append(
             NotificationEvent(
                 "run_succeeded" if succeeded else "run_failed",
@@ -310,7 +383,7 @@ class EngineRunner:
                 None,
                 config.strategy.name,
                 1,
-                {} if error is None else {"error": error},
+                lifecycle_payload,
             )
         )
         return self._emit_events(tuple(events))

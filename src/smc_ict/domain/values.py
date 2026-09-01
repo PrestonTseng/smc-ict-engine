@@ -13,7 +13,7 @@ _INSTRUMENT = re.compile(r"[A-Z0-9]+(?:-[A-Z0-9]+){2,5}\Z")
 _EVENT_TYPES = frozenset(
     {"run_started", "run_succeeded", "run_failed", "decision_found", "no_decision"}
 )
-_TIMEFRAMES = frozenset({"1m", "5m", "1h", "4h"})
+_TIMEFRAME_MINUTES = {"1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 240}
 
 
 class DecimalText(str):
@@ -55,9 +55,21 @@ class Timeframe(str):
     def __new__(cls, value: str) -> Self:
         if type(value) is not str:
             raise TypeError("timeframe must be a string")
-        if value not in _TIMEFRAMES:
+        if value not in _TIMEFRAME_MINUTES:
             raise ValueError(f"unknown timeframe {value!r}")
         return super().__new__(cls, value)
+
+    @property
+    def duration_minutes(self) -> int:
+        """Return the single canonical duration authority for this timeframe."""
+
+        return _TIMEFRAME_MINUTES[self]
+
+    @classmethod
+    def allowed_values(cls) -> tuple[str, ...]:
+        """Expose the closed canonical set without duplicating it in other layers."""
+
+        return tuple(_TIMEFRAME_MINUTES)
 
 
 class EventType(str):

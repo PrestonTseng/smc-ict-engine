@@ -13,7 +13,9 @@ from smc_ict.domain import Observation
 def candles(
     values: Iterable[tuple[str, str, str, str]], *, interval: str = "5m"
 ) -> tuple[DerivedCandle, ...]:
-    duration = 300_000 if interval == "5m" else 3_600_000
+    from smc_ict.domain import Timeframe
+
+    duration = Timeframe(interval).duration_minutes * 60_000
     return tuple(
         DerivedCandle(
             instrument_id="BTC-USDT-PERP",
@@ -95,6 +97,33 @@ def mirrored(values: list[tuple[str, str, str, str]]) -> list[tuple[str, str, st
         )
         for opening, high, low, close in values
     ]
+
+
+def test_execution_plugin_uses_the_configured_15m_candle_identity() -> None:
+    from smc_ict.indicators.ict import ClusteredLiquidityPlugin
+
+    series = candles([("100", "101", "99", "100")] * 12, interval="15m")
+    observation = ClusteredLiquidityPlugin(
+        {"pivot_width": 5, "minimum_pivots": 3, "margin_atr_fraction": "0.4"}
+    ).evaluate(context(series), {"smc.equal_high_low": dependency("smc.equal_high_low")})
+
+    assert observation.timeframe == "15m"
+
+
+def test_execution_plugin_retains_configured_15m_identity_when_no_bars_are_available() -> None:
+    from smc_ict.indicators.ict import ClusteredLiquidityPlugin
+
+    plugin = ClusteredLiquidityPlugin(
+        {"pivot_width": 5, "minimum_pivots": 3, "margin_atr_fraction": "0.4"}
+    )
+    unavailable = dependency("smc.equal_high_low", status="UNAVAILABLE")
+
+    observation = plugin.evaluate(
+        RunContext("BTC-USDT-PERP", 0, {"execution": ()}, {"execution": "15m"}),
+        {"smc.equal_high_low": unavailable},
+    )
+
+    assert (observation.status, observation.timeframe) == ("UNAVAILABLE", "15m")
 
 
 def test_clustered_liquidity_requires_three_pivots_and_tracks_strict_traversal() -> None:

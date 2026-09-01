@@ -260,6 +260,43 @@ def test_notifications_load_two_destinations_without_retaining_secrets() -> None
     assert len(a["hash_notifications"](config)) == 64
 
 
+def test_notifications_loader_accepts_native_discord_adapter() -> None:
+    a = api()
+    text = NOTIFICATIONS.replace("adapter: generic_webhook", "adapter: discord_webhook", 1).replace(
+        "maximum_events: 20", "maximum_events: 10", 1
+    )
+
+    config = a["load_notifications_text"](text, **notification_kwargs())
+
+    assert config.destinations["discord_1"].adapter == "discord_webhook"
+    assert config.destinations["discord_2"].adapter == "generic_webhook"
+
+
+@pytest.mark.parametrize("maximum_events", [11, 1000])
+def test_notifications_loader_rejects_discord_batch_above_ten(maximum_events: int) -> None:
+    a = api()
+    text = NOTIFICATIONS.replace("adapter: generic_webhook", "adapter: discord_webhook", 1).replace(
+        "maximum_events: 20", f"maximum_events: {maximum_events}", 1
+    )
+
+    with pytest.raises(
+        a["StrictConfigurationError"],
+        match=r"notifications\.destinations\.discord_1\.batching\.maximum_events: "
+        rf"expected 1\.\.10, got {maximum_events}",
+    ):
+        a["load_notifications_text"](text, **notification_kwargs())
+
+
+@pytest.mark.parametrize("maximum_events", [11, 1000])
+def test_notifications_loader_preserves_generic_webhook_batch_bound(maximum_events: int) -> None:
+    a = api()
+    text = NOTIFICATIONS.replace("maximum_events: 20", f"maximum_events: {maximum_events}", 1)
+
+    config = a["load_notifications_text"](text, **notification_kwargs())
+
+    assert config.destinations["discord_1"].batching.maximum_events == maximum_events
+
+
 @pytest.mark.parametrize(
     "old,new",
     [
@@ -292,6 +329,20 @@ def test_strategy_normalizes_decimal_strings_for_implemented_plugins() -> None:
     assert config.signals[1].parameters["threshold_atr_fraction"] == "0.1"
     assert len(a["hash_strategy"](config)) == 64
     assert a["load_strategy_text"](STRATEGY) == config
+
+
+def test_strategy_accepts_exact_15m_execution_role_without_aliases_or_unsafe_types() -> None:
+    a = api()
+    exact = STRATEGY.replace("execution: 5m", "execution: 15m")
+
+    assert a["load_strategy_text"](exact).roles["execution"] == "15m"
+
+    for alias in ("15M", "015m", "900s", "quarter-hour"):
+        with pytest.raises(a["StrictConfigurationError"], match="timeframe"):
+            a["load_strategy_text"](STRATEGY.replace("execution: 5m", f"execution: {alias}"))
+    for unsafe in ("15", "true", "null"):
+        with pytest.raises(a["StrictConfigurationError"], match="expected string"):
+            a["load_strategy_text"](STRATEGY.replace("execution: 5m", f"execution: {unsafe}"))
 
 
 def test_strategy_rejects_wrong_authority_unknown_plugin_and_numeric_decimal() -> None:

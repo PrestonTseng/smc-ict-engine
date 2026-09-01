@@ -3,7 +3,7 @@ schedule:
   timezone: UTC
   jobs:
     - id: source-aligned-research
-      cron: "7 */1 * * *"
+      cron: "1,16,31,46 * * * *"
       strategy: /config/strategies/source-aligned-research.yaml
       market_data: /config/market-data.yaml
       notifications: /config/notifications.yaml

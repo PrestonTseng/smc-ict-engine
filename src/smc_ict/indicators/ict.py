@@ -12,6 +12,7 @@ from smc_ict.domain import Observation
 from .base import (
     Candle,
     closed_candles,
+    configured_timeframe,
     decimal_text,
     dependency_problem,
     observation,
@@ -198,7 +199,7 @@ def _liquidity_zones(
 class ClusteredLiquidityPlugin:
     plugin_id = "ict.clustered_liquidity"
     role = "execution"
-    timeframe = "5m"
+    timeframe: str
     dependency_ids = ("smc.equal_high_low",)
 
     def __init__(self, parameters: Mapping[str, object]) -> None:
@@ -215,6 +216,7 @@ class ClusteredLiquidityPlugin:
             raise ValueError("margin_atr_fraction must be a source-representable tenth in 0.2..0.7")
 
     def evaluate(self, context: RunContext, dependencies: Mapping[str, Observation]) -> Observation:
+        self.timeframe = configured_timeframe(context, self.role)
         problem = dependency_problem(dependencies, self.dependency_ids, context)
         candles = closed_candles(context, self.role, self.timeframe)
         if problem is not None:
@@ -370,7 +372,7 @@ def _market_events(candles: tuple[Candle, ...], left: int) -> tuple[_MarketEvent
 class MarketStructurePlugin:
     plugin_id = "ict.market_structure"
     role = "execution"
-    timeframe = "5m"
+    timeframe: str
     dependency_ids = ("ict.clustered_liquidity",)
 
     def __init__(self, parameters: Mapping[str, object]) -> None:
@@ -384,6 +386,7 @@ class MarketStructurePlugin:
             raise ValueError("at least one structure event must be enabled")
 
     def evaluate(self, context: RunContext, dependencies: Mapping[str, Observation]) -> Observation:
+        self.timeframe = configured_timeframe(context, self.role)
         problem = dependency_problem(dependencies, self.dependency_ids, context)
         candles = closed_candles(context, self.role, self.timeframe)
         if problem is not None:
@@ -557,7 +560,7 @@ def _active_gaps(
 class FairValueGapPlugin:
     plugin_id = "ict.fair_value_gap"
     role = "execution"
-    timeframe = "5m"
+    timeframe: str
     dependency_ids = ("ict.market_structure",)
 
     def __init__(self, parameters: Mapping[str, object]) -> None:
@@ -571,6 +574,7 @@ class FairValueGapPlugin:
         self._length = _exact_int(parameters, "displacement_length", 1)
 
     def evaluate(self, context: RunContext, dependencies: Mapping[str, Observation]) -> Observation:
+        self.timeframe = configured_timeframe(context, self.role)
         problem = dependency_problem(dependencies, self.dependency_ids, context)
         candles = closed_candles(context, self.role, self.timeframe)
         warmup = self._length + 1 if self._require_displacement else 3

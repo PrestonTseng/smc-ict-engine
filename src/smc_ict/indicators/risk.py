@@ -8,7 +8,14 @@ from decimal import Decimal, InvalidOperation
 from smc_ict.application.graph import RunContext
 from smc_ict.domain import Observation
 
-from .base import closed_candles, decimal_text, dependency_problem, observation, wilder_atr
+from .base import (
+    closed_candles,
+    configured_timeframe,
+    decimal_text,
+    dependency_problem,
+    observation,
+    wilder_atr,
+)
 
 _PROJECT_SOURCE = ("project_strategy@1",)
 
@@ -27,7 +34,7 @@ def _payload_decimal(observation_value: Observation, field: str) -> Decimal | No
 class RiskLevelsPlugin:
     plugin_id = "project.risk_levels"
     role = "execution"
-    timeframe = "5m"
+    timeframe: str
     dependency_ids = ("ict.clustered_liquidity", "ict.fair_value_gap")
 
     def __init__(self, parameters: Mapping[str, object]) -> None:
@@ -42,6 +49,7 @@ class RiskLevelsPlugin:
             raise ValueError("minimum_reward_risk must be positive")
 
     def evaluate(self, context: RunContext, dependencies: Mapping[str, Observation]) -> Observation:
+        self.timeframe = configured_timeframe(context, self.role)
         problem = dependency_problem(dependencies, self.dependency_ids, context)
         candles = closed_candles(context, self.role, self.timeframe)
         if problem is not None:

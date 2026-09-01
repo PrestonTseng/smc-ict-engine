@@ -15,10 +15,8 @@ x-runtime: &runtime
     - ./data:/data
     - ./config:/config:ro
     - ./strategies:/config/strategies:ro
-  environment:
-    DISCORD_1_WEBHOOK_URL: ${DISCORD_1_WEBHOOK_URL:-}
   secrets:
-    - discord_2_webhook_url
+    - discord_webhook_url
 
 services:
   engine:
@@ -48,5 +46,5 @@ services:
     command: ["--help"]
 
 secrets:
-  discord_2_webhook_url:
-    file: ./secrets/discord_2_webhook_url
+  discord_webhook_url:
+    file: ./secrets/discord_webhook_url

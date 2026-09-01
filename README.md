@@ -27,19 +27,26 @@ The fixed database contract is:
 - Container path: `/data/smc_ict.db`
 - Bind mount: `./data:/data`
 
-Bootstrap the directories and secret file before you start Compose:
+Bootstrap the writable data directory and the one Discord secret before you start Compose. The
+container runs as UID/GID `10001:10001`, so the host bind must be writable by that identity:
 
-```sh
-mkdir -p data secrets
+```bash
+sudo install -d -m 0750 -o 10001 -g 10001 data
+install -d -m 0700 secrets
 umask 077
-touch secrets/discord_2_webhook_url
-export DISCORD_1_WEBHOOK_URL='https://your-approved-webhook.example/path'
-printf '%s' 'https://your-approved-webhook.example/path' > secrets/discord_2_webhook_url
-docker compose config
-docker compose up -d --build
+read -rsp 'Discord webhook URL: ' DISCORD_WEBHOOK_URL && printf '\n'
+printf '%s' "$DISCORD_WEBHOOK_URL" > secrets/discord_webhook_url
+unset DISCORD_WEBHOOK_URL
+export SMC_ICT_GIT_COMMIT="$(git rev-parse HEAD)"
+docker compose config --quiet
+docker compose build engine
+docker compose up -d engine
 ```
 
-The sample notification configuration has two destinations. The first reads `DISCORD_1_WEBHOOK_URL`. The second reads `/run/secrets/discord_2_webhook_url`. Use separate endpoints for separate destinations. Do not commit resolved endpoints, `.env`, `secrets/`, databases, backups, or logs.
+The sample has one `discord_debug` destination for all five event types. It resolves only
+`/run/secrets/discord_webhook_url`, mounted from `./secrets/discord_webhook_url`. Do not commit the
+resolved endpoint, `.env`, `secrets/`, databases, backups, or logs. See `docs/operations.md` for the
+copy-ready rotation, health, database, log, manual-run, and shutdown commands.
 
 Read readiness and logs:
 
@@ -49,7 +56,7 @@ docker compose exec engine smc-ict database status --database /data/smc_ict.db
 docker compose logs --follow engine
 ```
 
-The Compose health command reads the scheduler readiness marker at `/data/scheduler.ready` and confirms that its process is alive. `READY` means that the scheduler validated every referenced configuration file and completed restart recovery. It does not mean that the configured gates passed or that a research decision is available.
+The Compose health command reads the scheduler readiness marker at `/data/scheduler.ready` and confirms that its process is alive. Scheduler `READY` means that configuration validation and restart recovery completed. It does not prove provider synchronization, a successful strategy run, or Discord delivery; use logs and persisted run receipts for those outcomes.
 
 Stop the scheduler without killing its process:
 
@@ -73,9 +80,9 @@ uv run smc-ict validate \
   --notifications config/notifications.yaml
 ```
 
-Validation checks YAML structure, types, provider IDs, schedule policy, notification references, and strategy dependencies. It does not resolve a notification endpoint. Endpoint resolution occurs only at the generic HTTPS webhook adapter boundary.
+Validation checks YAML structure, types, provider IDs, schedule policy, notification references, and strategy dependencies. It does not resolve a notification endpoint. Endpoint resolution occurs only at the selected notification adapter boundary.
 
-`config/market-data.yaml` selects Binance USD-M. Use `config/market-data.okx-swap.yaml` to select OKX swap. Keep the configured instrument IDs aligned with the selected provider symbols. Use one market-data file per run.
+`config/market-data.yaml` selects OKX swap. `config/market-data.binance-usdm.yaml` remains an inactive Binance USD-M alternate. Keep the configured instrument IDs aligned with the selected provider symbols. Use one market-data file per run.
 
 Bootstrap or inspect a local database:
 

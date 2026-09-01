@@ -259,6 +259,35 @@ def test_readme_documents_the_operator_workflows_and_safety_boundaries() -> None
     assert "The Compose health command reads `/data/smc_ict.db`" not in readme
 
 
+def test_operator_docs_cover_the_single_secret_release_workflow_and_runtime_evidence() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    operations = (ROOT / "docs/operations.md").read_text(encoding="utf-8")
+    configuration = (ROOT / "docs/configuration.md").read_text(encoding="utf-8")
+    operator_docs = "\n".join((readme, operations, configuration))
+
+    for required_command in (
+        "install -d -m 0750 -o 10001 -g 10001 data",
+        "secrets/discord_webhook_url",
+        'export SMC_ICT_GIT_COMMIT="$(git rev-parse HEAD)"',
+        "docker compose build engine",
+        "docker compose up -d engine",
+        "docker compose ps",
+        "docker compose logs --tail 100 engine",
+        "smc-ict database status --database /data/smc_ict.db",
+        "docker compose --profile manual run --rm manual run",
+        "docker compose down",
+    ):
+        assert required_command in operations
+
+    assert "four runs per hour" in operations
+    assert "15-minute boundaries" in operations
+    assert "provider synchronization" in operations
+    assert "Discord delivery" in operations
+    assert "DISCORD_1_WEBHOOK_URL" not in operator_docs
+    assert "discord_2_webhook_url" not in operator_docs
+    assert "https://" not in operator_docs
+
+
 def test_required_operator_document_set_is_present_and_cross_linked() -> None:
     required = {
         "concepts.md": "research-only",
@@ -274,7 +303,7 @@ def test_required_operator_document_set_is_present_and_cross_linked() -> None:
         assert boundary in document
 
     env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
-    assert env_example == "DISCORD_1_WEBHOOK_URL=\nSMC_ICT_GIT_COMMIT=\n"
+    assert env_example == "SMC_ICT_GIT_COMMIT=\n"
 
 
 def test_schema_uses_json_validation_supported_by_the_container_sqlite() -> None:
