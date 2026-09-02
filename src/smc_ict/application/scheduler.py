@@ -2,21 +2,36 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
+from threading import Lock
 from time import monotonic
 from time import sleep as system_sleep
 from typing import Protocol
 from zoneinfo import ZoneInfo
 
+from apscheduler.events import (  # type: ignore[import-untyped]
+    EVENT_JOB_MAX_INSTANCES,
+    JobSubmissionEvent,
+)
 from apscheduler.job import Job  # type: ignore[import-untyped]
 from apscheduler.schedulers.background import BackgroundScheduler  # type: ignore[import-untyped]
 from apscheduler.triggers.cron import CronTrigger  # type: ignore[import-untyped]
 
+from smc_ict.application.ports.repository import RunRecord
+from smc_ict.application.receipt_contract import (
+    RUN_RECEIPT_STATUSES,
+    RUN_RECEIPT_SUCCESS_STATUSES,
+    SCHEDULER_FAILURE_OUTCOMES,
+    is_canonical_run_id,
+)
 from smc_ict.application.runtime import ProcessLock, RunReceipt
 from smc_ict.configuration.models import ScheduleConfig, ScheduleJob
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,7 +57,7 @@ def run_with_retries(
     """Retry failed receipts only; overlap skips and successes are terminal."""
     receipt = operation()
     for delay in policy.backoff_seconds:
-        if receipt.status != "FAILED":
+        if receipt.status in RUN_RECEIPT_SUCCESS_STATUSES or receipt.status == "OVERLAP_SKIPPED":
             return receipt
         sleep(delay)
         receipt = operation()
@@ -50,7 +65,19 @@ def run_with_retries(
 
 
 class RecoveryRepository(Protocol):
-    def recover_running_runs(self, *, completed_at_ms: int, reason: str) -> tuple[str, ...]: ...
+    def recover_running_runs(
+        self,
+        *,
+        completed_at_ms: int,
+        reason: str,
+        include_scheduler_attempts: bool = True,
+    ) -> tuple[str, ...]: ...
+
+    def start_scheduler_attempt(self, job_id: str, *, started_at_ms: int, sequence: int) -> str: ...
+
+    def finish_scheduler_attempt(
+        self, attempt_id: str, outcome: str, *, completed_at_ms: int
+    ) -> RunRecord: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,9 +113,12 @@ class InternalScheduler:
         self._retry_policy = retry_policy
         self._recovery_lock_path = None if recovery_lock_path is None else Path(recovery_lock_path)
         self._backend = BackgroundScheduler(timezone=ZoneInfo("UTC"))
+        self._backend.add_listener(self._handle_scheduler_event, EVENT_JOB_MAX_INSTANCES)
         self._operations: list[Callable[[], RunReceipt]] = []
         self._recovered: tuple[str, ...] = ()
         self._ready = False
+        self._attempt_sequence = 0
+        self._attempt_lock = Lock()
 
     def start(self, *, paused: bool = False) -> None:
         if self._backend.running:
@@ -117,7 +147,7 @@ class InternalScheduler:
                 self._backend.add_job(
                     self._run_job,
                     trigger=trigger,
-                    args=(operation,),
+                    args=(operation, job.id),
                     id=job.id,
                     coalesce=False,
                     max_instances=1,
@@ -128,8 +158,79 @@ class InternalScheduler:
         self._backend.start(paused=paused)
         self._ready = True
 
-    def _run_job(self, operation: Callable[[], RunReceipt]) -> RunReceipt:
-        return run_with_retries(operation, self._retry_policy)
+    def _run_job(self, operation: Callable[[], RunReceipt], job_id: str) -> RunReceipt:
+        started = self._clock_ms()
+        sequence = self._next_attempt_sequence()
+        attempt_id = self._repository.start_scheduler_attempt(
+            job_id, started_at_ms=started, sequence=sequence
+        )
+        try:
+            receipt = run_with_retries(operation, self._retry_policy)
+        except Exception as exc:
+            completed = self._clock_ms()
+            receipt = RunReceipt(
+                None, "FAILED", "scheduled", started, completed, 0, 0, type(exc).__name__
+            )
+        completed = max(started, self._clock_ms())
+        durable_outcome = self._durable_outcome(receipt)
+        self._repository.finish_scheduler_attempt(
+            attempt_id, durable_outcome, completed_at_ms=completed
+        )
+        log = LOGGER.info if durable_outcome in RUN_RECEIPT_SUCCESS_STATUSES else LOGGER.warning
+        child_run_id = (
+            receipt.run_id
+            if receipt.status in RUN_RECEIPT_STATUSES and is_canonical_run_id(receipt.run_id)
+            else None
+        )
+        log(
+            "scheduler_job_receipt",
+            extra={
+                "attempt_id": attempt_id,
+                "job_id": job_id,
+                "outcome": durable_outcome,
+                "child_run_id": child_run_id,
+            },
+        )
+        return receipt
+
+    @staticmethod
+    def _durable_outcome(receipt: RunReceipt) -> str:
+        if receipt.status in RUN_RECEIPT_SUCCESS_STATUSES or receipt.status == "OVERLAP_SKIPPED":
+            return receipt.status
+        if receipt.status == "FAILED" and receipt.error in SCHEDULER_FAILURE_OUTCOMES:
+            return receipt.error
+        return "FAILED"
+
+    def _handle_scheduler_event(self, event: JobSubmissionEvent) -> None:
+        for scheduled_run_time in event.scheduled_run_times:
+            self._record_overlap(
+                event.job_id, scheduled_at_ms=int(scheduled_run_time.timestamp() * 1000)
+            )
+
+    def _record_overlap(self, job_id: str, *, scheduled_at_ms: int) -> None:
+        attempt_id = self._repository.start_scheduler_attempt(
+            job_id,
+            started_at_ms=scheduled_at_ms,
+            sequence=self._next_attempt_sequence(),
+        )
+        completed = max(scheduled_at_ms, self._clock_ms())
+        self._repository.finish_scheduler_attempt(
+            attempt_id, "OVERLAP_SKIPPED", completed_at_ms=completed
+        )
+        LOGGER.warning(
+            "scheduler_job_overlap_skipped",
+            extra={
+                "attempt_id": attempt_id,
+                "job_id": job_id,
+                "outcome": "OVERLAP_SKIPPED",
+            },
+        )
+
+    def _next_attempt_sequence(self) -> int:
+        with self._attempt_lock:
+            sequence = self._attempt_sequence
+            self._attempt_sequence += 1
+            return sequence
 
     def get_job(self, job_id: str) -> Job:
         job = self._backend.get_job(job_id)

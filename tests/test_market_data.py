@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from dataclasses import replace
 from pathlib import Path
+from time import monotonic
 
 import pytest
 
@@ -137,6 +139,43 @@ def test_okx_metadata_gate_and_documented_closed_kline_shape() -> None:
     }
 
 
+def test_okx_reuses_one_server_clock_snapshot_across_a_bounded_sync() -> None:
+    from smc_ict.adapters.market_data.okx_swap import OkxSwapProvider
+    from smc_ict.application.ports import InstrumentMapping, KlineRequest
+
+    candles = json.loads((FIXTURES / "okx_history_candles.json").read_text(encoding="utf-8"))
+    instruments = json.loads((FIXTURES / "okx_instruments.json").read_text(encoding="utf-8"))
+    calls: list[str] = []
+
+    def request_json(path: str, parameters: dict[str, object]) -> object:
+        del parameters
+        calls.append(path)
+        if path.endswith("instruments"):
+            return instruments
+        if path.endswith("time"):
+            return {"code": "0", "msg": "", "data": [{"ts": "1722470460000"}]}
+        return candles
+
+    provider = OkxSwapProvider(request_json=request_json)
+    provider.validate_instrument(InstrumentMapping("BTC-USDT-PERP", "BTC-USDT-SWAP"))
+    request = KlineRequest(
+        "okx_swap",
+        "LINEAR_PERPETUAL",
+        "BTC-USDT-PERP",
+        "BTC-USDT-SWAP",
+        "1m",
+        1722470400000,
+        1722470400000,
+    )
+
+    assert provider.server_time_ms() == 1722470460000
+    assert provider.latest_closed_open_time_ms() == 1722470400000
+    provider.fetch_page(request)
+    provider.fetch_page(request)
+
+    assert calls.count("/api/v5/public/time") == 1
+
+
 def test_okx_final_page_trims_older_provider_spill_rows() -> None:
     from smc_ict.adapters.market_data.okx_swap import OkxSwapProvider
     from smc_ict.application.ports import InstrumentMapping, KlineRequest
@@ -244,6 +283,14 @@ def test_generic_sync_paginates_and_rejects_non_contiguous_or_conflicting_pages(
             assert required_start_open_ms == 0
             self.pages.append(candles)
 
+        def load_candles(self, *args: object) -> tuple[ClosedCandle, ...]:
+            del args
+            return tuple(candle for page in self.pages for candle in page)
+
+        def load_sync_state(self, *args: object) -> None:
+            del args
+            return None
+
     first = KlinePage((candle(0), candle(60_000)), 120_000, False)
     second = KlinePage((candle(120_000),), None, True)
     provider = Provider([first, second])
@@ -267,6 +314,174 @@ def test_generic_sync_paginates_and_rejects_non_contiguous_or_conflicting_pages(
         MarketSyncService(Provider([conflict]), Repository()).sync_range(
             InstrumentMapping("BTC-USDT-PERP", "BTCUSDT"), 0, 0
         )
+
+
+def test_interrupted_sync_resumes_only_missing_candles_and_completed_range_is_idempotent(
+    tmp_path: Path,
+) -> None:
+    from smc_ict.adapters.persistence.sqlite import SQLiteRepository
+    from smc_ict.application.market_sync import MarketSyncService
+    from smc_ict.application.ports import InstrumentMapping, KlinePage
+    from smc_ict.domain import ClosedCandle
+
+    def candle(open_time_ms: int) -> ClosedCandle:
+        return ClosedCandle(
+            provider_id="binance_usdm",
+            market_type="LINEAR_PERPETUAL",
+            instrument_id="BTC-USDT-PERP",
+            provider_symbol="BTCUSDT",
+            interval="1m",
+            open_time_ms=open_time_ms,
+            close_time_ms=open_time_ms + 59_999,
+            open="100",
+            high="102",
+            low="99",
+            close="101",
+            base_volume="1",
+            quote_volume="100",
+            source_fields={
+                "trade_count": 1,
+                "taker_buy_base_volume": "0.5",
+                "taker_buy_quote_volume": "50",
+            },
+        )
+
+    class Provider:
+        provider_id = "binance_usdm"
+
+        def __init__(self, pages: list[KlinePage | Exception]) -> None:
+            self.pages = pages
+            self.requests = []
+
+        def validate_instrument(self, mapping: object) -> None:
+            assert mapping == InstrumentMapping("BTC-USDT-PERP", "BTCUSDT")
+
+        def server_time_ms(self) -> int:
+            return 180_000
+
+        def latest_closed_open_time_ms(self) -> int:
+            return 120_000
+
+        def fetch_page(self, request: object) -> KlinePage:
+            self.requests.append(request)
+            result = self.pages.pop(0)
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+    repository = SQLiteRepository(tmp_path / "resume.sqlite3")
+    interrupted = Provider(
+        [KlinePage((candle(0), candle(60_000)), 120_000, False), RuntimeError("interrupted")]
+    )
+    with pytest.raises(RuntimeError, match="interrupted"):
+        MarketSyncService(interrupted, repository).sync_range(
+            InstrumentMapping("BTC-USDT-PERP", "BTCUSDT"), 0, 120_000
+        )
+
+    resumed = Provider([KlinePage((candle(120_000),), None, True)])
+    stored = MarketSyncService(resumed, repository).sync_range(
+        InstrumentMapping("BTC-USDT-PERP", "BTCUSDT"), 0, 120_000
+    )
+    completed = Provider([])
+    loaded = MarketSyncService(completed, repository).sync_range(
+        InstrumentMapping("BTC-USDT-PERP", "BTCUSDT"), 0, 120_000
+    )
+
+    assert [request.start_open_time_ms for request in resumed.requests] == [120_000]
+    assert [item.open_time_ms for item in stored] == [0, 60_000, 120_000]
+    assert loaded == stored
+    assert completed.requests == []
+
+    with sqlite3.connect(repository.path) as connection:
+        connection.execute("DELETE FROM candles_1m WHERE open_time_ms=60000")
+    corrupted = Provider([])
+    with pytest.raises(ValueError, match="sync state hides a canonical candle gap"):
+        MarketSyncService(corrupted, repository).sync_range(
+            InstrumentMapping("BTC-USDT-PERP", "BTCUSDT"), 0, 120_000
+        )
+    assert corrupted.requests == []
+
+
+def test_two_instrument_ninety_day_bootstrap_completes_inside_lease_and_is_idempotent(
+    tmp_path: Path,
+) -> None:
+    from smc_ict.adapters.persistence.sqlite import SQLiteRepository
+    from smc_ict.application.market_sync import MarketSyncService
+    from smc_ict.application.ports import InstrumentMapping, KlinePage, KlineRequest
+    from smc_ict.domain import ClosedCandle
+
+    history_minutes = 90 * 24 * 60
+    end_open_time_ms = (history_minutes - 1) * 60_000
+
+    class Provider:
+        provider_id = "okx_swap"
+
+        def __init__(self) -> None:
+            self.fetch_count = 0
+
+        def validate_instrument(self, mapping: object) -> None:
+            assert isinstance(mapping, InstrumentMapping)
+
+        def server_time_ms(self) -> int:
+            return end_open_time_ms + 60_000
+
+        def latest_closed_open_time_ms(self) -> int:
+            return end_open_time_ms
+
+        def fetch_page(self, request: KlineRequest) -> KlinePage:
+            self.fetch_count += 1
+            first = max(request.start_open_time_ms, request.end_open_time_ms - 99 * 60_000)
+            candles = tuple(
+                ClosedCandle(
+                    "okx_swap",
+                    "LINEAR_PERPETUAL",
+                    request.instrument_id,
+                    request.provider_symbol,
+                    "1m",
+                    open_time_ms,
+                    open_time_ms + 59_999,
+                    "1",
+                    "1",
+                    "1",
+                    "1",
+                    "1",
+                    "1",
+                    {"contract_volume": "1"},
+                )
+                for open_time_ms in range(first, request.end_open_time_ms + 1, 60_000)
+            )
+            complete = first == request.start_open_time_ms
+            return KlinePage(candles, None if complete else first - 60_000, complete)
+
+    database = tmp_path / "bootstrap.sqlite3"
+    repository = SQLiteRepository(database)
+    provider = Provider()
+    sync = MarketSyncService(provider, repository)
+    mappings = (
+        InstrumentMapping("BTC-USDT-PERP", "BTC-USDT-SWAP"),
+        InstrumentMapping("ETH-USDT-PERP", "ETH-USDT-SWAP"),
+    )
+
+    started = monotonic()
+    first_results = tuple(sync.sync_range(mapping, 0, end_open_time_ms) for mapping in mappings)
+    elapsed_seconds = monotonic() - started
+    initial_fetch_count = provider.fetch_count
+    second_results = tuple(sync.sync_range(mapping, 0, end_open_time_ms) for mapping in mappings)
+
+    assert tuple(len(result) for result in first_results) == (history_minutes, history_minutes)
+    assert second_results == first_results
+    assert provider.fetch_count == initial_fetch_count == 2 * (history_minutes // 100)
+    assert elapsed_seconds < 900
+    with sqlite3.connect(database) as connection:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+            )
+        }
+        assert tables == {"candles_1m", "sync_state", "runs", "observations", "decisions"}
+        assert connection.execute("PRAGMA journal_mode").fetchone() == ("wal",)
+        assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
 
 
 def test_switching_only_market_data_config_selects_the_concrete_provider() -> None:

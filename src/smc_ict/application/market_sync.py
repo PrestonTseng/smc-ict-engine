@@ -6,7 +6,13 @@ from collections.abc import Sequence
 from itertools import pairwise
 from typing import Protocol
 
-from smc_ict.application.ports import InstrumentMapping, KlinePage, KlineProvider, KlineRequest
+from smc_ict.application.ports import (
+    InstrumentMapping,
+    KlinePage,
+    KlineProvider,
+    KlineRequest,
+    SyncState,
+)
 from smc_ict.domain import ClosedCandle
 
 
@@ -18,6 +24,19 @@ class CandlePageRepository(Protocol):
         successful_sync_ms: int,
         required_start_open_ms: int,
     ) -> None: ...
+
+    def load_candles(
+        self,
+        provider_id: str,
+        market_type: str,
+        instrument_id: str,
+        start_open_ms: int,
+        end_open_ms: int,
+    ) -> tuple[ClosedCandle, ...]: ...
+
+    def load_sync_state(
+        self, provider_id: str, market_type: str, instrument_id: str
+    ) -> SyncState | None: ...
 
 
 class MarketSyncService:
@@ -39,6 +58,50 @@ class MarketSyncService:
         if end_open_time_ms > latest_closed:
             raise ValueError("requested range includes an open canonical minute")
 
+        existing = self._repository.load_candles(
+            self._provider.provider_id,
+            "LINEAR_PERPETUAL",
+            mapping.instrument_id,
+            start_open_time_ms,
+            end_open_time_ms,
+        )
+        self._validate_existing(mapping, existing)
+        present = {candle.open_time_ms for candle in existing}
+        self._validate_sync_state(mapping, start_open_time_ms, present)
+
+        for missing_start, missing_end in self._missing_ranges(
+            start_open_time_ms, end_open_time_ms, present
+        ):
+            self._sync_missing_range(
+                mapping,
+                missing_start,
+                missing_end,
+                successful_sync_ms=successful_sync_ms,
+                required_start_open_ms=start_open_time_ms,
+            )
+
+        ordered = self._repository.load_candles(
+            self._provider.provider_id,
+            "LINEAR_PERPETUAL",
+            mapping.instrument_id,
+            start_open_time_ms,
+            end_open_time_ms,
+        )
+        self._validate_existing(mapping, ordered)
+        expected = tuple(range(start_open_time_ms, end_open_time_ms + 1, 60_000))
+        if tuple(candle.open_time_ms for candle in ordered) != expected:
+            raise ValueError("completed provider range is not contiguous")
+        return ordered
+
+    def _sync_missing_range(
+        self,
+        mapping: InstrumentMapping,
+        start_open_time_ms: int,
+        end_open_time_ms: int,
+        *,
+        successful_sync_ms: int,
+        required_start_open_ms: int,
+    ) -> None:
         current_start = start_open_time_ms
         current_end = end_open_time_ms
         requested_cursors: set[int] = set()
@@ -64,7 +127,7 @@ class MarketSyncService:
             self._repository.store_candle_page(
                 candles,
                 successful_sync_ms=successful_sync_ms,
-                required_start_open_ms=start_open_time_ms,
+                required_start_open_ms=required_start_open_ms,
             )
             if page.complete:
                 break
@@ -79,11 +142,53 @@ class MarketSyncService:
             else:
                 raise ValueError("provider page cursor is outside bounded progress")
 
-        ordered = tuple(sorted(accepted.values(), key=lambda candle: candle.open_time_ms))
         expected = tuple(range(start_open_time_ms, end_open_time_ms + 1, 60_000))
+        ordered = tuple(sorted(accepted.values(), key=lambda candle: candle.open_time_ms))
         if tuple(candle.open_time_ms for candle in ordered) != expected:
             raise ValueError("completed provider range is not contiguous")
-        return ordered
+
+    def _validate_existing(
+        self, mapping: InstrumentMapping, candles: Sequence[ClosedCandle]
+    ) -> None:
+        for candle in candles:
+            if (
+                candle.provider_id != self._provider.provider_id
+                or candle.market_type != "LINEAR_PERPETUAL"
+                or candle.instrument_id != mapping.instrument_id
+                or candle.provider_symbol != mapping.provider_symbol
+                or candle.interval != "1m"
+            ):
+                raise ValueError("stored candle identity does not match the requested market")
+
+    def _validate_sync_state(
+        self, mapping: InstrumentMapping, start_open_time_ms: int, present: set[int]
+    ) -> None:
+        state = self._repository.load_sync_state(
+            self._provider.provider_id, "LINEAR_PERPETUAL", mapping.instrument_id
+        )
+        if state is None or state.last_completed_open_time_ms < start_open_time_ms:
+            return
+        expected_prefix = set(
+            range(start_open_time_ms, state.last_completed_open_time_ms + 1, 60_000)
+        )
+        if not expected_prefix <= present:
+            raise ValueError("sync state hides a canonical candle gap")
+
+    @staticmethod
+    def _missing_ranges(
+        start_open_time_ms: int, end_open_time_ms: int, present: set[int]
+    ) -> tuple[tuple[int, int], ...]:
+        ranges: list[tuple[int, int]] = []
+        missing_start: int | None = None
+        for open_time_ms in range(start_open_time_ms, end_open_time_ms + 1, 60_000):
+            if open_time_ms not in present and missing_start is None:
+                missing_start = open_time_ms
+            if open_time_ms in present and missing_start is not None:
+                ranges.append((missing_start, open_time_ms - 60_000))
+                missing_start = None
+        if missing_start is not None:
+            ranges.append((missing_start, end_open_time_ms))
+        return tuple(ranges)
 
     @staticmethod
     def _validate_page(request: KlineRequest, page: KlinePage) -> tuple[ClosedCandle, ...]:

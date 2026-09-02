@@ -37,6 +37,7 @@ class BinanceUsdmProvider:
             raise ProviderConfigurationError("Binance page limit must be an integer from 1 to 1500")
         self._request_json = request_json or JsonRequester(self._base_url)
         self._page_limit = page_limit
+        self._server_time_snapshot_ms: int | None = None
 
     def validate_instrument(self, mapping: object) -> None:
         # Binance's kline endpoint rejects an invalid configured symbol. No separate
@@ -44,12 +45,15 @@ class BinanceUsdmProvider:
         del mapping
 
     def server_time_ms(self) -> int:
+        if self._server_time_snapshot_ms is not None:
+            return self._server_time_snapshot_ms
         payload = self._request_json("/fapi/v1/time", {})
         if type(payload) is not dict or type(payload.get("serverTime")) is not int:
             raise ProviderProtocolError("Binance time response is malformed")
         value = cast(int, payload["serverTime"])
         if len(str(value)) != 13:
             raise ProviderProtocolError("Binance server time has ambiguous units")
+        self._server_time_snapshot_ms = value
         return value
 
     def latest_closed_open_time_ms(self) -> int:

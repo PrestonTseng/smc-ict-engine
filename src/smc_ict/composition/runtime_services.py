@@ -11,10 +11,17 @@ from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from threading import Lock
 from time import time_ns
+from typing import Protocol
 
 from smc_ict.adapters.persistence.sqlite import SQLiteRepository
 from smc_ict.application.notifications import NotificationRouter
 from smc_ict.application.ports import Notifier
+from smc_ict.application.receipt_contract import (
+    RUN_RECEIPT_STATUSES,
+    RUN_RECEIPT_SUCCESS_STATUSES,
+    RUN_RECEIPT_TRIGGERS,
+    is_canonical_run_id,
+)
 from smc_ict.application.runtime import (
     EngineRunner,
     ProcessLock,
@@ -22,7 +29,7 @@ from smc_ict.application.runtime import (
     RunRequest,
     RuntimeConfiguration,
 )
-from smc_ict.application.scheduler import InternalScheduler, RecoveryRepository, RetryPolicy
+from smc_ict.application.scheduler import InternalScheduler, RetryPolicy
 from smc_ict.composition.registries import (
     CompositionRoot,
     build_market_provider,
@@ -160,6 +167,16 @@ def _host_config_path(container_path: str, config_root: str | Path) -> Path:
     return config.parent.joinpath("strategies", *relative.parts)
 
 
+class RunningRunRecovery(Protocol):
+    def recover_running_runs(
+        self,
+        *,
+        completed_at_ms: int,
+        reason: str,
+        include_scheduler_attempts: bool = True,
+    ) -> tuple[str, ...]: ...
+
+
 class _ManagedSubprocessOperation:
     """Own one scheduled child and reconcile its durable run after interruption."""
 
@@ -169,7 +186,7 @@ class _ManagedSubprocessOperation:
         *,
         maximum_runtime_seconds: int,
         termination_grace_seconds: float,
-        repository: RecoveryRepository,
+        repository: RunningRunRecovery,
         lock_path: str | Path,
     ) -> None:
         self._command = command
@@ -232,30 +249,88 @@ class _ManagedSubprocessOperation:
             with ProcessLock(self._lock_path) as recovery_lock:
                 if recovery_lock.acquired:
                     recovered = self._repository.recover_running_runs(
-                        completed_at_ms=current_time_ms(), reason=reason
+                        completed_at_ms=current_time_ms(),
+                        reason=reason,
+                        include_scheduler_attempts=False,
                     )
             run_id = recovered[0] if len(recovered) == 1 else None
             with self._state_lock:
                 self._interruption = (run_id, reason)
 
 
+_CHILD_RECEIPT_FIELDS = frozenset(RunReceipt.__dataclass_fields__)
+_CHILD_RECEIPT_RETURN_CODES = {
+    "SUCCEEDED": 0,
+    "SUCCEEDED_WITH_WARNINGS": 0,
+    "FAILED": 1,
+    "OVERLAP_SKIPPED": 75,
+}
+
+
+def _invalid_child_receipt() -> RunReceipt:
+    now = current_time_ms()
+    return RunReceipt(None, "FAILED", "scheduled", now, now, 0, 0, "INVALID_CHILD_RECEIPT")
+
+
 def _receipt_from_child(returncode: int, stdout: str, stderr: str) -> RunReceipt:
+    del stderr
     try:
         payload = json.loads(stdout)
-        return RunReceipt(
-            payload.get("run_id"),
-            payload["status"],
-            payload.get("trigger", "scheduled"),
-            payload.get("started_at_ms", current_time_ms()),
-            payload.get("completed_at_ms", current_time_ms()),
-            payload.get("instrument_count", 0),
-            payload.get("decision_count", 0),
-            payload.get("error"),
+    except json.JSONDecodeError:
+        return _invalid_child_receipt()
+    if type(payload) is not dict or frozenset(payload) != _CHILD_RECEIPT_FIELDS:
+        return _invalid_child_receipt()
+
+    run_id = payload["run_id"]
+    status = payload["status"]
+    trigger = payload["trigger"]
+    started_at_ms = payload["started_at_ms"]
+    completed_at_ms = payload["completed_at_ms"]
+    instrument_count = payload["instrument_count"]
+    decision_count = payload["decision_count"]
+    error = payload["error"]
+    if (
+        type(returncode) is not int
+        or type(status) is not str
+        or status not in RUN_RECEIPT_STATUSES
+        or _CHILD_RECEIPT_RETURN_CODES[status] != returncode
+        or type(trigger) is not str
+        or trigger not in RUN_RECEIPT_TRIGGERS
+        or type(started_at_ms) is not int
+        or started_at_ms < 0
+        or type(completed_at_ms) is not int
+        or completed_at_ms < started_at_ms
+        or type(instrument_count) is not int
+        or instrument_count < 0
+        or type(decision_count) is not int
+        or decision_count < 0
+        or (run_id is not None and not is_canonical_run_id(run_id))
+        or (error is not None and (type(error) is not str or not 1 <= len(error) <= 4000))
+        or (status in RUN_RECEIPT_SUCCESS_STATUSES and run_id is None)
+        or (status == "SUCCEEDED" and error is not None)
+        or (status == "SUCCEEDED_WITH_WARNINGS" and error is None)
+        or (status == "FAILED" and error is None)
+        or (
+            status == "OVERLAP_SKIPPED"
+            and (
+                run_id is not None
+                or error is not None
+                or instrument_count != 0
+                or decision_count != 0
+            )
         )
-    except (json.JSONDecodeError, KeyError, TypeError):
-        now = current_time_ms()
-        error = stderr.strip()[:4000] or f"RUN_EXIT_{returncode}"
-        return RunReceipt(None, "FAILED", "scheduled", now, now, 0, 0, error)
+    ):
+        return _invalid_child_receipt()
+    return RunReceipt(
+        run_id,
+        status,
+        trigger,
+        started_at_ms,
+        completed_at_ms,
+        instrument_count,
+        decision_count,
+        "CHILD_FAILED" if status == "FAILED" else error,
+    )
 
 
 def _subprocess_operation(
@@ -264,7 +339,7 @@ def _subprocess_operation(
     database: str | Path,
     lock_path: str | Path,
     config_root: str | Path,
-    repository: RecoveryRepository,
+    repository: RunningRunRecovery,
     termination_grace_seconds: float = 5.0,
 ) -> Callable[[], RunReceipt]:
     command = [

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Mapping, Sequence
+from hashlib import sha256
 from pathlib import Path
 from typing import cast
 
@@ -14,6 +15,10 @@ from smc_ict.application.ports.repository import (
     ObservationRecord,
     RunRecord,
     SyncState,
+)
+from smc_ict.application.receipt_contract import (
+    RUN_RECEIPT_SUCCESS_STATUSES,
+    SCHEDULER_FAILURE_OUTCOMES,
 )
 from smc_ict.domain import ClosedCandle
 
@@ -396,6 +401,54 @@ class SQLiteRepository:
         finally:
             connection.close()
 
+    def start_scheduler_attempt(self, job_id: str, *, started_at_ms: int, sequence: int) -> str:
+        """Persist a redacted scheduler-owned attempt before invoking its child operation."""
+        if type(job_id) is not str or not 1 <= len(job_id) <= 200:
+            raise ValueError("scheduler job ID must contain 1..200 characters")
+        if type(started_at_ms) is not int or started_at_ms < 0:
+            raise ValueError("scheduler attempt time must be a non-negative integer")
+        if type(sequence) is not int or sequence < 0:
+            raise ValueError("scheduler attempt sequence must be a non-negative integer")
+        identity = self._canonical_json([job_id, started_at_ms, sequence]).encode()
+        attempt_id = "scheduler-attempt-" + sha256(b"scheduler-attempt-v1\0" + identity).hexdigest()
+        aligned_start = started_at_ms // 60_000 * 60_000
+        self.store_run(
+            RunRecord(
+                run_id=attempt_id,
+                status="RUNNING",
+                started_at_ms=started_at_ms,
+                completed_at_ms=None,
+                strategy_name=f"scheduler:{job_id}",
+                strategy_version="attempt-v1",
+                strategy_config_hash=sha256(job_id.encode()).hexdigest(),
+                provider_id="scheduler",
+                market_type="LINEAR_PERPETUAL",
+                market_config_hash=sha256(b"scheduler-attempt-v1").hexdigest(),
+                git_commit="0" * 40,
+                data_start_open_ms=aligned_start,
+                data_end_close_ms=aligned_start + 59_999,
+                data_hash=sha256(attempt_id.encode()).hexdigest(),
+                error=None,
+            )
+        )
+        return attempt_id
+
+    def finish_scheduler_attempt(
+        self, attempt_id: str, outcome: str, *, completed_at_ms: int
+    ) -> RunRecord:
+        """Finish an attempt with only its outcome category, never child error text."""
+        terminal_status = "SUCCEEDED" if outcome in RUN_RECEIPT_SUCCESS_STATUSES else "FAILED"
+        error = (
+            None
+            if terminal_status == "SUCCEEDED"
+            else outcome
+            if outcome in SCHEDULER_FAILURE_OUTCOMES
+            else "FAILED"
+        )
+        return self.finish_run(
+            attempt_id, terminal_status, completed_at_ms=completed_at_ms, error=error
+        )
+
     def notification_delivered_at(self, destination_id: str, deduplication_id: str) -> int | None:
         self._validate_notification_identity(destination_id, deduplication_id)
         delivered: list[int] = []
@@ -739,7 +792,13 @@ class SQLiteRepository:
             raise RuntimeError("committed run disappeared")
         return result
 
-    def recover_running_runs(self, *, completed_at_ms: int, reason: str) -> tuple[str, ...]:
+    def recover_running_runs(
+        self,
+        *,
+        completed_at_ms: int,
+        reason: str,
+        include_scheduler_attempts: bool = True,
+    ) -> tuple[str, ...]:
         """Fail stale RUNNING rows atomically during scheduler restart recovery."""
         if type(completed_at_ms) is not int or completed_at_ms < 0:
             raise ValueError("recovery time must be a non-negative integer")
@@ -748,15 +807,17 @@ class SQLiteRepository:
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
+            ownership_clause = "" if include_scheduler_attempts else " AND provider_id<>'scheduler'"
             rows = connection.execute(
                 "SELECT run_id FROM runs WHERE status='RUNNING' AND started_at_ms<=? "
-                "ORDER BY run_id",
+                + ownership_clause
+                + " ORDER BY run_id",
                 (completed_at_ms,),
             ).fetchall()
             run_ids = tuple(row["run_id"] for row in rows)
             connection.execute(
                 "UPDATE runs SET status='FAILED',completed_at_ms=?,error=? "
-                "WHERE status='RUNNING' AND started_at_ms<=?",
+                "WHERE status='RUNNING' AND started_at_ms<=?" + ownership_clause,
                 (completed_at_ms, reason, completed_at_ms),
             )
             connection.commit()
