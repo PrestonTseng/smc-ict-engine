@@ -11,8 +11,8 @@ The scheduler found a stale `RUNNING` row after process death. It changed the ro
 If the engine lock remains held, find the owner before you stop it:
 
 ```sh
-lsof ./data/engine.lock
-docker compose ps
+lsof "$DATA_FOLDER/engine.lock"
+./scripts/compose.sh ps
 ```
 
 Do not delete an active lock file. The lock uses the inode, and file deletion can permit a second owner.

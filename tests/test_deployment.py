@@ -7,10 +7,30 @@ import tarfile
 import zipfile
 from pathlib import Path
 
+import pytest
 from ruamel.yaml import YAML
 
 ROOT = Path(__file__).parents[1]
 UV_0_11_6_INDEX_DIGEST = "sha256:b1e699368d24c57cda93c338a57a8c5a119009ba809305cc8e86986d4a006754"
+PROTECTED_MOUNT_PROBE = """set -eu;
+probe=/data/.mount-write-probe;
+: > "$probe";
+test -f "$probe";
+rm "$probe";
+test ! -e "$probe";
+if touch /config/.mount-write-probe; then
+    rm -f /config/.mount-write-probe;
+    exit 1;
+fi;
+if touch /strategies/.mount-write-probe; then
+    rm -f /strategies/.mount-write-probe;
+    exit 1;
+fi;
+if touch /run/secrets/discord_webhook_url; then
+    exit 1;
+fi;
+echo PROBE_OK
+"""
 
 
 def test_packages_exclude_deterministic_fictional_runtime_and_secret_material(
@@ -182,20 +202,7 @@ def test_compose_avoids_the_legacy_nested_read_only_bind_mount_and_starts_a_fres
     cap_drop: [ALL]
     security_opt: [\"no-new-privileges:true\"]
     tmpfs: [\"/tmp:rw,noexec,nosuid,size=16m\"]
-    command:
-      - sh
-      - -c
-      - >-
-        set -eu;
-        probe=/data/.mount-write-probe;
-        : > "$$probe";
-        test -f "$$probe";
-        rm "$$probe";
-        test ! -e "$$probe";
-        ! touch /config/.mount-write-probe;
-        ! touch /strategies/.mount-write-probe &&
-        ! touch /run/secrets/discord_webhook_url &&
-        echo PROBE_OK
+    command: ["sh", "-c", {json.dumps(PROTECTED_MOUNT_PROBE.replace("$", "$$"))}]
     volumes:
       - type: volume
         source: probe_data
@@ -393,6 +400,82 @@ volumes:
                 )
                 assert remaining.returncode == 0, remaining.stderr
                 assert remaining.stdout.strip() == ""
+
+
+@pytest.mark.parametrize(
+    "writable_target",
+    (None, "/config", "/strategies", "/run/secrets/discord_webhook_url"),
+    ids=("hardened", "writable-config", "writable-strategies", "writable-secret"),
+)
+def test_protected_mount_probe_rejects_each_writable_target(
+    writable_target: str | None,
+) -> None:
+    host_fixture = Path("/Users/preston/Repository/agents/tools/smc-ict-engine")
+    protected_mounts = {
+        "/config": host_fixture / "config",
+        "/strategies": host_fixture / "strategies",
+        "/run/secrets/discord_webhook_url": host_fixture / "README.md",
+    }
+    container_name = (
+        f"protected-mount-probe-{os.getpid()}-"
+        f"{(writable_target or 'hardened').replace('/', '-').strip('-')}"
+    )
+    command = [
+        "docker",
+        "run",
+        "--name",
+        container_name,
+        "--rm",
+        "--user",
+        "10001:10001",
+        "--read-only",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges:true",
+        "--tmpfs",
+        "/tmp:rw,noexec,nosuid,size=16m",
+        "--tmpfs",
+        "/data:rw,noexec,nosuid,mode=1777,size=16m",
+    ]
+    for target, source in protected_mounts.items():
+        if target == writable_target:
+            tmpfs_target = "/run/secrets" if target.startswith("/run/secrets/") else target
+            command.extend(("--tmpfs", f"{tmpfs_target}:rw,noexec,nosuid,mode=1777,size=16m"))
+        else:
+            command.extend(
+                (
+                    "--mount",
+                    f"type=bind,source={source},target={target},readonly",
+                )
+            )
+    command.extend(("busybox:1.37.0", "sh", "-c", PROTECTED_MOUNT_PROBE))
+
+    try:
+        result = subprocess.run(
+            command,
+            text=True,
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
+        if writable_target is None:
+            assert result.returncode == 0, result.stderr
+            assert result.stdout.strip().endswith("PROBE_OK")
+        else:
+            assert result.returncode == 1, (
+                f"probe did not reject writable target {writable_target}: "
+                f"stdout={result.stdout!r}, stderr={result.stderr!r}"
+            )
+            assert "PROBE_OK" not in result.stdout
+    finally:
+        subprocess.run(
+            ["docker", "rm", "--force", container_name],
+            text=True,
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
 
 
 def test_data_folder_preflight_accepts_only_real_absolute_directories(tmp_path: Path) -> None:
@@ -652,6 +735,20 @@ def test_operator_docs_cover_the_single_secret_release_workflow_and_runtime_evid
     assert "discord_2_webhook_url" not in operator_docs
     assert "https://" not in operator_docs
     assert "./data" not in operations
+
+
+def test_operator_docs_describe_required_env_and_safe_status_commands() -> None:
+    configuration = (ROOT / "docs/configuration.md").read_text(encoding="utf-8")
+    troubleshooting = (ROOT / "docs/troubleshooting.md").read_text(encoding="utf-8")
+
+    assert (
+        "immutable image revision and required absolute `DATA_FOLDER` configuration"
+        in configuration
+    )
+    assert 'lsof "$DATA_FOLDER/engine.lock"' in troubleshooting
+    assert "./scripts/compose.sh ps" in troubleshooting
+    assert "lsof ./data/engine.lock" not in troubleshooting
+    assert "docker compose ps" not in troubleshooting
 
 
 def test_required_operator_document_set_is_present_and_cross_linked() -> None:
