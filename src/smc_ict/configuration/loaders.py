@@ -257,10 +257,9 @@ def config_path(value: object, field: str) -> str:
     path = PurePosixPath(text)
     if not path.is_absolute() or path.suffix not in {".yaml", ".yml"} or ".." in path.parts:
         fail(field, "expected a normalized YAML path below /config")
-    try:
-        path.relative_to("/config")
-    except ValueError:
-        fail(field, "path must be below /config")
+    permitted_roots = (PurePosixPath("/config"), PurePosixPath("/strategies"))
+    if not any(path.is_relative_to(root) for root in permitted_roots):
+        fail(field, "path must be below /config or /strategies")
     if str(path) != text:
         fail(field, "path must be normalized")
     return text

@@ -149,6 +149,8 @@ def run_once(
 
 
 def _host_config_path(container_path: str, config_root: str | Path) -> Path:
+    if Path(config_root) == Path("/"):
+        return Path(container_path)
     relative = PurePosixPath(container_path).relative_to("/config")
     return Path(config_root).joinpath(*relative.parts)
 

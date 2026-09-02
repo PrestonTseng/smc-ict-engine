@@ -12,9 +12,23 @@ x-runtime: &runtime
   security_opt: ["no-new-privileges:true"]
   tmpfs: ["/tmp:rw,noexec,nosuid,size=16m"]
   volumes:
-    - ./data:/data
-    - ./config:/config:ro
-    - ./strategies:/config/strategies:ro
+    - type: bind
+      source: ${DATA_FOLDER:?Set DATA_FOLDER to the writable host data directory}
+      target: /data
+      bind:
+        create_host_path: false
+    - type: bind
+      source: ./config
+      target: /config
+      read_only: true
+      bind:
+        create_host_path: false
+    - type: bind
+      source: ./strategies
+      target: /strategies
+      read_only: true
+      bind:
+        create_host_path: false
   secrets:
     - discord_webhook_url
 
@@ -31,6 +45,8 @@ services:
       - /data/engine.lock
       - --health-file
       - /data/scheduler.ready
+      - --config-root
+      - /
     restart: unless-stopped
     stop_grace_period: 30s
     healthcheck:

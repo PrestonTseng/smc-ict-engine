@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import os
 import subprocess
 import tarfile
 import zipfile
@@ -79,10 +81,31 @@ def test_compose_contract_keeps_the_database_in_the_required_bind_mount() -> Non
         "/data/engine.lock",
         "--health-file",
         "/data/scheduler.ready",
+        "--config-root",
+        "/",
     ]
-    assert "./data:/data" in service["volumes"]
-    assert "./config:/config:ro" in service["volumes"]
-    assert "./strategies:/config/strategies:ro" in service["volumes"]
+    assert service["volumes"] == [
+        {
+            "type": "bind",
+            "source": "${DATA_FOLDER:?Set DATA_FOLDER to the writable host data directory}",
+            "target": "/data",
+            "bind": {"create_host_path": False},
+        },
+        {
+            "type": "bind",
+            "source": "./config",
+            "target": "/config",
+            "read_only": True,
+            "bind": {"create_host_path": False},
+        },
+        {
+            "type": "bind",
+            "source": "./strategies",
+            "target": "/strategies",
+            "read_only": True,
+            "bind": {"create_host_path": False},
+        },
+    ]
     assert service["healthcheck"]["test"] == [
         "CMD",
         "smc-ict",
@@ -90,6 +113,239 @@ def test_compose_contract_keeps_the_database_in_the_required_bind_mount() -> Non
         "--health-file",
         "/data/scheduler.ready",
     ]
+
+
+def test_compose_avoids_the_legacy_nested_read_only_bind_mount_and_starts_a_fresh_probe(
+    tmp_path: Path,
+) -> None:
+    compose = YAML(typ="safe").load((ROOT / "compose.yaml").read_text(encoding="utf-8"))
+    engine = compose["services"]["engine"]
+
+    assert engine["volumes"] == [
+        {
+            "type": "bind",
+            "source": "${DATA_FOLDER:?Set DATA_FOLDER to the writable host data directory}",
+            "target": "/data",
+            "bind": {"create_host_path": False},
+        },
+        {
+            "type": "bind",
+            "source": "./config",
+            "target": "/config",
+            "read_only": True,
+            "bind": {"create_host_path": False},
+        },
+        {
+            "type": "bind",
+            "source": "./strategies",
+            "target": "/strategies",
+            "read_only": True,
+            "bind": {"create_host_path": False},
+        },
+    ]
+    assert engine["command"][0:2] == ["scheduler", "--schedule"]
+    assert engine["command"][-2:] == ["--config-root", "/"]
+
+    config = tmp_path / "config"
+    strategies = tmp_path / "strategies"
+    config.mkdir()
+    strategies.mkdir()
+    (config / "schedule.yaml").write_text("schedule: fixture\n", encoding="utf-8")
+    (strategies / "fixture.yaml").write_text("strategy: fixture\n", encoding="utf-8")
+    config.chmod(0o777)
+    strategies.chmod(0o777)
+    os.sync()
+
+    legacy = tmp_path / "legacy-compose.yaml"
+    legacy.write_text(
+        """services:
+  probe:
+    image: busybox:1.37.0
+    read_only: true
+    command: [\"sh\", \"-c\", \"true\"]
+    volumes:
+      - type: bind
+        source: ./config
+        target: /config
+        read_only: true
+      - type: bind
+        source: ./strategies
+        target: /config/strategies
+        read_only: true
+""",
+        encoding="utf-8",
+    )
+    legacy_project = f"legacy-mount-contract-{os.getpid()}"
+    legacy_start = subprocess.run(
+        [
+            "docker",
+            "compose",
+            "-p",
+            legacy_project,
+            "-f",
+            str(legacy),
+            "up",
+            "--abort-on-container-exit",
+        ],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        timeout=60,
+        check=False,
+    )
+    assert legacy_start.returncode != 0
+    assert "create mountpoint for /config/strategies mount" in legacy_start.stderr
+    assert "read-only file system" in legacy_start.stderr
+
+    host_fixture = Path("/Users/preston/Repository/agents/tools/smc-ict-engine")
+    host_config = host_fixture / "config"
+    host_strategies = host_fixture / "strategies"
+    host_secret_fixture = host_fixture / "README.md"
+    repaired = tmp_path / "repaired-compose.yaml"
+    repaired.write_text(
+        f"""services:
+  probe:
+    image: busybox:1.37.0
+    user: \"10001:10001\"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [\"no-new-privileges:true\"]
+    tmpfs: [\"/tmp:rw,noexec,nosuid,size=16m\"]
+    command:
+      - sh
+      - -c
+      - >-
+        ! touch /config/.mount-write-probe &&
+        ! touch /strategies/.mount-write-probe &&
+        test -d /data &&
+        ! touch /run/secrets/discord_webhook_url
+    volumes:
+      - type: volume
+        source: probe_data
+        target: /data
+      - type: bind
+        source: {host_config}
+        target: /config
+        read_only: true
+        bind: {{create_host_path: false}}
+      - type: bind
+        source: {host_strategies}
+        target: /strategies
+        read_only: true
+        bind: {{create_host_path: false}}
+    secrets:
+      - discord_webhook_url
+secrets:
+  discord_webhook_url:
+    file: {host_secret_fixture}
+volumes:
+  probe_data:
+""",
+        encoding="utf-8",
+    )
+    repaired_project = f"repaired-mount-contract-{os.getpid()}"
+    try:
+        repaired_create = subprocess.run(
+            [
+                "docker",
+                "compose",
+                "-p",
+                repaired_project,
+                "-f",
+                str(repaired),
+                "create",
+            ],
+            cwd=tmp_path,
+            text=True,
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
+        assert repaired_create.returncode == 0, repaired_create.stderr
+        container_id = subprocess.run(
+            [
+                "docker",
+                "compose",
+                "-p",
+                repaired_project,
+                "-f",
+                str(repaired),
+                "ps",
+                "--all",
+                "-q",
+                "probe",
+            ],
+            cwd=tmp_path,
+            text=True,
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
+        assert container_id.returncode == 0, container_id.stderr
+        assert container_id.stdout.strip()
+        inspection = subprocess.run(
+            ["docker", "inspect", container_id.stdout.strip()],
+            text=True,
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
+        assert inspection.returncode == 0, inspection.stderr
+        container = json.loads(inspection.stdout)[0]
+        mounts = {mount["Destination"]: mount for mount in container["Mounts"]}
+        assert [mount["Destination"] for mount in container["Mounts"] if mount["RW"]] == ["/data"]
+        assert mounts["/data"]["Type"] == "volume"
+        assert mounts["/config"]["RW"] is False
+        assert mounts["/strategies"]["RW"] is False
+        assert mounts["/run/secrets/discord_webhook_url"]["RW"] is False
+        assert container["Config"]["User"] == "10001:10001"
+        assert container["HostConfig"]["ReadonlyRootfs"] is True
+        assert container["HostConfig"]["CapDrop"] == ["ALL"]
+        assert container["HostConfig"]["SecurityOpt"] == ["no-new-privileges:true"]
+        assert container["HostConfig"]["Tmpfs"] == {"/tmp": "rw,noexec,nosuid,size=16m"}
+        repaired_start = subprocess.run(
+            ["docker", "start", "-a", container_id.stdout.strip()],
+            text=True,
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
+        assert repaired_start.returncode == 0, repaired_start.stderr
+    finally:
+        subprocess.run(
+            [
+                "docker",
+                "compose",
+                "-p",
+                repaired_project,
+                "-f",
+                str(repaired),
+                "down",
+                "--volumes",
+            ],
+            cwd=tmp_path,
+            text=True,
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
+        subprocess.run(
+            [
+                "docker",
+                "compose",
+                "-p",
+                legacy_project,
+                "-f",
+                str(legacy),
+                "down",
+                "--volumes",
+            ],
+            cwd=tmp_path,
+            text=True,
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
 
 
 def test_compose_and_image_apply_non_root_immutable_runtime_hardening() -> None:
@@ -303,7 +559,7 @@ def test_required_operator_document_set_is_present_and_cross_linked() -> None:
         assert boundary in document
 
     env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
-    assert env_example == "SMC_ICT_GIT_COMMIT=\n"
+    assert env_example == "SMC_ICT_GIT_COMMIT=\nDATA_FOLDER=./data\n"
 
 
 def test_schema_uses_json_validation_supported_by_the_container_sqlite() -> None:

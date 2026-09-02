@@ -23,9 +23,9 @@ The Compose service owns the internal scheduler. Do not install host cron for th
 
 The fixed database contract is:
 
-- Host path: `./data/smc_ict.db`
+- Host path: `${DATA_FOLDER:-./data}/smc_ict.db`
 - Container path: `/data/smc_ict.db`
-- Bind mount: `./data:/data`
+- Bind mount: `${DATA_FOLDER:-./data}:/data` (the only writable application bind)
 
 Bootstrap the writable data directory and the one Discord secret before you start Compose. The
 container runs as UID/GID `10001:10001`, so the host bind must be writable by that identity:
@@ -38,6 +38,7 @@ read -rsp 'Discord webhook URL: ' DISCORD_WEBHOOK_URL && printf '\n'
 printf '%s' "$DISCORD_WEBHOOK_URL" > secrets/discord_webhook_url
 unset DISCORD_WEBHOOK_URL
 export SMC_ICT_GIT_COMMIT="$(git rev-parse HEAD)"
+export DATA_FOLDER="${DATA_FOLDER:-./data}"
 docker compose config --quiet
 docker compose build engine
 docker compose up -d engine

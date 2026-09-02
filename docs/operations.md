@@ -14,12 +14,17 @@ read -rsp 'Discord webhook URL: ' DISCORD_WEBHOOK_URL && printf '\n'
 printf '%s' "$DISCORD_WEBHOOK_URL" > secrets/discord_webhook_url
 unset DISCORD_WEBHOOK_URL
 export SMC_ICT_GIT_COMMIT="$(git rev-parse HEAD)"
+export DATA_FOLDER="${DATA_FOLDER:-./data}"
 uv run smc-ict database bootstrap --database ./data/smc_ict.db
 uv run smc-ict database status --database ./data/smc_ict.db
 docker compose config --quiet
 docker compose build engine
 docker compose up -d engine
 ```
+
+`DATA_FOLDER` is the only writable application bind and must already exist as a real directory.
+Compose rejects a missing configured data, config, or strategy source rather than creating it. Do
+not use a symlink for `DATA_FOLDER`; use the real directory that owns the SQLite state.
 
 Rotate the secret atomically, then recreate the service so Compose remounts it:
 
@@ -55,7 +60,7 @@ operator window.
 
 ```sh
 docker compose --profile manual run --rm manual run \
-  --strategy /config/strategies/source-aligned-research.yaml \
+  --strategy /strategies/source-aligned-research.yaml \
   --market-data /config/market-data.yaml \
   --notifications /config/notifications.yaml \
   --database /data/smc_ict.db \
