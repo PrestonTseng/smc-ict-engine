@@ -33,6 +33,71 @@ echo PROBE_OK
 """
 
 
+def _daemon_visible_project_fixture_candidates() -> tuple[Path, ...]:
+    return (
+        ROOT,
+        Path("/Users/preston/Repository/agents/tools/smc-ict-engine"),
+    )
+
+
+def _daemon_visible_project_fixture(candidates: tuple[Path, ...] | None = None) -> Path:
+    failures: list[str] = []
+    for candidate in candidates or _daemon_visible_project_fixture_candidates():
+        probe = subprocess.run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--mount",
+                f"type=bind,source={candidate},target=/fixture,readonly",
+                "busybox:1.37.0",
+                "sh",
+                "-c",
+                (
+                    "test -d /fixture/config && "
+                    "test -d /fixture/strategies && "
+                    "test -f /fixture/README.md"
+                ),
+            ],
+            text=True,
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
+        if probe.returncode == 0:
+            return candidate
+        failures.append(f"{candidate}: exit {probe.returncode}: {probe.stderr.strip()}")
+    raise AssertionError("no daemon-visible project fixture found:\n" + "\n".join(failures))
+
+
+def test_daemon_visible_project_fixture_survives_a_missing_host_candidate() -> None:
+    missing_candidate = Path("/daemon-host/path-that-must-not-exist/smc-ict-engine")
+
+    fixture = _daemon_visible_project_fixture(
+        (missing_candidate, *_daemon_visible_project_fixture_candidates())
+    )
+
+    assert fixture != missing_candidate
+    probe = subprocess.run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "--mount",
+            f"type=bind,source={fixture},target=/fixture,readonly",
+            "busybox:1.37.0",
+            "sh",
+            "-c",
+            "test -d /fixture/config && test -d /fixture/strategies && test -f /fixture/README.md",
+        ],
+        text=True,
+        capture_output=True,
+        timeout=60,
+        check=False,
+    )
+    assert probe.returncode == 0, probe.stderr
+
+
 def test_packages_exclude_deterministic_fictional_runtime_and_secret_material(
     tmp_path: Path,
 ) -> None:
@@ -166,7 +231,7 @@ def test_compose_avoids_the_legacy_nested_read_only_bind_mount_and_starts_a_fres
     assert engine["command"][0:2] == ["scheduler", "--schedule"]
     assert engine["command"][-2:] == ["--config-root", "/"]
 
-    host_fixture = Path("/Users/preston/Repository/agents/tools/smc-ict-engine")
+    host_fixture = _daemon_visible_project_fixture()
     host_config = host_fixture / "config"
     host_strategies = host_fixture / "strategies"
     host_secret_fixture = host_fixture / "README.md"
@@ -410,7 +475,7 @@ volumes:
 def test_protected_mount_probe_rejects_each_writable_target(
     writable_target: str | None,
 ) -> None:
-    host_fixture = Path("/Users/preston/Repository/agents/tools/smc-ict-engine")
+    host_fixture = _daemon_visible_project_fixture()
     protected_mounts = {
         "/config": host_fixture / "config",
         "/strategies": host_fixture / "strategies",
