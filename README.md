@@ -23,25 +23,26 @@ The Compose service owns the internal scheduler. Do not install host cron for th
 
 The fixed database contract is:
 
-- Host path: `${DATA_FOLDER:-./data}/smc_ict.db`
+- Host path: `${DATA_FOLDER}/smc_ict.db`
 - Container path: `/data/smc_ict.db`
-- Bind mount: `${DATA_FOLDER:-./data}:/data` (the only writable application bind)
+- Bind mount: `${DATA_FOLDER}:/data` (the only writable application bind)
 
 Bootstrap the writable data directory and the one Discord secret before you start Compose. The
 container runs as UID/GID `10001:10001`, so the host bind must be writable by that identity:
 
 ```bash
-sudo install -d -m 0750 -o 10001 -g 10001 data
+export DATA_FOLDER="/absolute/path/to/smc-ict-data"
+sudo install -d -m 0750 -o 10001 -g 10001 "$DATA_FOLDER"
 install -d -m 0700 secrets
 umask 077
 read -rsp 'Discord webhook URL: ' DISCORD_WEBHOOK_URL && printf '\n'
 printf '%s' "$DISCORD_WEBHOOK_URL" > secrets/discord_webhook_url
 unset DISCORD_WEBHOOK_URL
 export SMC_ICT_GIT_COMMIT="$(git rev-parse HEAD)"
-export DATA_FOLDER="${DATA_FOLDER:-./data}"
-docker compose config --quiet
-docker compose build engine
-docker compose up -d engine
+./scripts/preflight-data-folder.sh
+./scripts/compose.sh config --quiet
+./scripts/compose.sh build engine
+./scripts/compose.sh up -d engine
 ```
 
 The sample has one `discord_debug` destination for all five event types. It resolves only
@@ -52,9 +53,9 @@ copy-ready rotation, health, database, log, manual-run, and shutdown commands.
 Read readiness and logs:
 
 ```sh
-docker compose ps
-docker compose exec engine smc-ict database status --database /data/smc_ict.db
-docker compose logs --follow engine
+./scripts/compose.sh ps
+uv run smc-ict database status --database "$DATA_FOLDER/smc_ict.db"
+./scripts/compose.sh logs --follow engine
 ```
 
 The Compose health command reads the scheduler readiness marker at `/data/scheduler.ready` and confirms that its process is alive. Scheduler `READY` means that configuration validation and restart recovery completed. It does not prove provider synchronization, a successful strategy run, or Discord delivery; use logs and persisted run receipts for those outcomes.
@@ -62,8 +63,8 @@ The Compose health command reads the scheduler readiness marker at `/data/schedu
 Stop the scheduler without killing its process:
 
 ```sh
-docker compose stop --timeout 30 engine
-docker compose down
+./scripts/compose.sh stop --timeout 30 engine
+./scripts/compose.sh down
 ```
 
 The image sends `SIGTERM` to the CLI. The scheduler stops new fires, applies its bounded child termination and reconciliation path, and writes a `SHUTDOWN` receipt.
@@ -88,8 +89,8 @@ Validation checks YAML structure, types, provider IDs, schedule policy, notifica
 Bootstrap or inspect a local database:
 
 ```sh
-uv run smc-ict database bootstrap --database ./data/smc_ict.db
-uv run smc-ict database status --database ./data/smc_ict.db
+uv run smc-ict database bootstrap --database "$DATA_FOLDER/smc_ict.db"
+uv run smc-ict database status --database "$DATA_FOLDER/smc_ict.db"
 ```
 
 The notifier dry test validates a bounded event payload without a delivery attempt:
@@ -110,8 +111,8 @@ uv run smc-ict run \
   --strategy strategies/source-aligned-research.yaml \
   --market-data config/market-data.yaml \
   --notifications config/notifications.yaml \
-  --database ./data/smc_ict.db \
-  --lock ./data/engine.lock \
+  --database "$DATA_FOLDER/smc_ict.db" \
+  --lock "$DATA_FOLDER/engine.lock" \
   --trigger manual
 ```
 
@@ -122,9 +123,9 @@ Start the scheduler outside Compose only for local diagnosis:
 ```sh
 uv run smc-ict scheduler \
   --schedule config/schedule.yaml \
-  --database ./data/smc_ict.db \
-  --lock ./data/engine.lock \
-  --config-root .
+  --database "$DATA_FOLDER/smc_ict.db" \
+  --lock "$DATA_FOLDER/engine.lock" \
+  --config-root config
 ```
 
 ## Strategy DAG authoring
@@ -148,34 +149,34 @@ For a partial failure, read the service log, then examine the destination identi
 Stop the engine before a backup or restore. SQLite backups must use a consistent database state.
 
 ```sh
-docker compose stop engine
+./scripts/compose.sh stop engine
 mkdir -p backups
-sqlite3 ./data/smc_ict.db '.backup backups/smc_ict.db'
+sqlite3 "$DATA_FOLDER/smc_ict.db" '.backup backups/smc_ict.db'
 sqlite3 backups/smc_ict.db 'PRAGMA integrity_check;'
 ```
 
 Restore only after you stop the service:
 
 ```sh
-docker compose stop engine
-cp backups/smc_ict.db ./data/smc_ict.db
-docker compose up -d engine
+./scripts/compose.sh stop engine
+cp backups/smc_ict.db "$DATA_FOLDER/smc_ict.db"
+./scripts/compose.sh up -d engine
 ```
 
 Upgrade and restart with the same bind mount:
 
 ```sh
-docker compose pull
-docker compose up -d --build
-docker compose logs --tail 100 engine
+./scripts/compose.sh pull
+./scripts/compose.sh up -d --build
+./scripts/compose.sh logs --tail 100 engine
 ```
 
 If a process dies, start the service again. The advisory lock releases when the process dies. Scheduler startup marks stale `RUNNING` receipts as `FAILED` with `PROCESS_RESTART`. If the lock remains held, identify the process before you stop it:
 
 ```sh
-lsof ./data/engine.lock
-docker compose ps
-docker compose restart engine
+lsof "$DATA_FOLDER/engine.lock"
+./scripts/compose.sh ps
+./scripts/compose.sh restart engine
 ```
 
 ## Source provenance and license boundary

@@ -146,61 +146,32 @@ def test_compose_avoids_the_legacy_nested_read_only_bind_mount_and_starts_a_fres
     assert engine["command"][0:2] == ["scheduler", "--schedule"]
     assert engine["command"][-2:] == ["--config-root", "/"]
 
-    config = tmp_path / "config"
-    strategies = tmp_path / "strategies"
-    config.mkdir()
-    strategies.mkdir()
-    (config / "schedule.yaml").write_text("schedule: fixture\n", encoding="utf-8")
-    (strategies / "fixture.yaml").write_text("strategy: fixture\n", encoding="utf-8")
-    config.chmod(0o777)
-    strategies.chmod(0o777)
-    os.sync()
-
+    host_fixture = Path("/Users/preston/Repository/agents/tools/smc-ict-engine")
+    host_config = host_fixture / "config"
+    host_strategies = host_fixture / "strategies"
+    host_secret_fixture = host_fixture / "README.md"
     legacy = tmp_path / "legacy-compose.yaml"
     legacy.write_text(
-        """services:
+        f"""services:
   probe:
     image: busybox:1.37.0
     read_only: true
     command: [\"sh\", \"-c\", \"true\"]
     volumes:
       - type: bind
-        source: ./config
+        source: {host_strategies}
         target: /config
         read_only: true
+        bind: {{create_host_path: false}}
       - type: bind
-        source: ./strategies
+        source: {host_config}
         target: /config/strategies
         read_only: true
+        bind: {{create_host_path: false}}
 """,
         encoding="utf-8",
     )
     legacy_project = f"legacy-mount-contract-{os.getpid()}"
-    legacy_start = subprocess.run(
-        [
-            "docker",
-            "compose",
-            "-p",
-            legacy_project,
-            "-f",
-            str(legacy),
-            "up",
-            "--abort-on-container-exit",
-        ],
-        cwd=tmp_path,
-        text=True,
-        capture_output=True,
-        timeout=60,
-        check=False,
-    )
-    assert legacy_start.returncode != 0
-    assert "create mountpoint for /config/strategies mount" in legacy_start.stderr
-    assert "read-only file system" in legacy_start.stderr
-
-    host_fixture = Path("/Users/preston/Repository/agents/tools/smc-ict-engine")
-    host_config = host_fixture / "config"
-    host_strategies = host_fixture / "strategies"
-    host_secret_fixture = host_fixture / "README.md"
     repaired = tmp_path / "repaired-compose.yaml"
     repaired.write_text(
         f"""services:
@@ -215,10 +186,16 @@ def test_compose_avoids_the_legacy_nested_read_only_bind_mount_and_starts_a_fres
       - sh
       - -c
       - >-
-        ! touch /config/.mount-write-probe &&
+        set -eu;
+        probe=/data/.mount-write-probe;
+        : > "$$probe";
+        test -f "$$probe";
+        rm "$$probe";
+        test ! -e "$$probe";
+        ! touch /config/.mount-write-probe;
         ! touch /strategies/.mount-write-probe &&
-        test -d /data &&
-        ! touch /run/secrets/discord_webhook_url
+        ! touch /run/secrets/discord_webhook_url &&
+        echo PROBE_OK
     volumes:
       - type: volume
         source: probe_data
@@ -244,7 +221,29 @@ volumes:
         encoding="utf-8",
     )
     repaired_project = f"repaired-mount-contract-{os.getpid()}"
+    ownership_container = f"{repaired_project}-data-owner"
     try:
+        legacy_start = subprocess.run(
+            [
+                "docker",
+                "compose",
+                "-p",
+                legacy_project,
+                "-f",
+                str(legacy),
+                "up",
+                "--abort-on-container-exit",
+            ],
+            cwd=tmp_path,
+            text=True,
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
+        assert legacy_start.returncode != 0
+        assert "create mountpoint for /config/strategies mount" in legacy_start.stderr
+        assert "read-only file system" in legacy_start.stderr
+
         repaired_create = subprocess.run(
             [
                 "docker",
@@ -295,6 +294,27 @@ volumes:
         mounts = {mount["Destination"]: mount for mount in container["Mounts"]}
         assert [mount["Destination"] for mount in container["Mounts"] if mount["RW"]] == ["/data"]
         assert mounts["/data"]["Type"] == "volume"
+        initialize_data = subprocess.run(
+            [
+                "docker",
+                "run",
+                "--name",
+                ownership_container,
+                "--user",
+                "0:0",
+                "--volume",
+                f"{mounts['/data']['Name']}:/data",
+                "busybox:1.37.0",
+                "chown",
+                "10001:10001",
+                "/data",
+            ],
+            text=True,
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
+        assert initialize_data.returncode == 0, initialize_data.stderr
         assert mounts["/config"]["RW"] is False
         assert mounts["/strategies"]["RW"] is False
         assert mounts["/run/secrets/discord_webhook_url"]["RW"] is False
@@ -311,7 +331,15 @@ volumes:
             check=False,
         )
         assert repaired_start.returncode == 0, repaired_start.stderr
+        assert repaired_start.stdout.strip().endswith("PROBE_OK")
     finally:
+        subprocess.run(
+            ["docker", "rm", "--force", ownership_container],
+            text=True,
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
         subprocess.run(
             [
                 "docker",
@@ -346,6 +374,84 @@ volumes:
             timeout=60,
             check=False,
         )
+        for project in (legacy_project, repaired_project):
+            for resource_command in (
+                ["docker", "ps", "--all", "--quiet"],
+                ["docker", "network", "ls", "--quiet"],
+                ["docker", "volume", "ls", "--quiet"],
+            ):
+                remaining = subprocess.run(
+                    [
+                        *resource_command,
+                        "--filter",
+                        f"label=com.docker.compose.project={project}",
+                    ],
+                    text=True,
+                    capture_output=True,
+                    timeout=60,
+                    check=False,
+                )
+                assert remaining.returncode == 0, remaining.stderr
+                assert remaining.stdout.strip() == ""
+
+
+def test_data_folder_preflight_accepts_only_real_absolute_directories(tmp_path: Path) -> None:
+    script = ROOT / "scripts/preflight-data-folder.sh"
+    assert script.is_file()
+    valid = tmp_path / "state with spaces"
+    valid.mkdir()
+    regular_file = tmp_path / "not-a-directory"
+    regular_file.write_text("fixture\n", encoding="utf-8")
+    real_parent = tmp_path / "real-parent"
+    real_parent.mkdir()
+    (real_parent / "state").mkdir()
+    symlink_leaf = tmp_path / "state-link"
+    symlink_leaf.symlink_to(valid, target_is_directory=True)
+    symlink_parent = tmp_path / "parent-link"
+    symlink_parent.symlink_to(real_parent, target_is_directory=True)
+
+    accepted = subprocess.run(
+        [str(script)],
+        env={**os.environ, "DATA_FOLDER": str(valid)},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert accepted.returncode == 0, accepted.stderr
+
+    rejected = (
+        None,
+        "",
+        "relative/data",
+        str(tmp_path / "missing"),
+        str(regular_file),
+        str(symlink_leaf),
+        str(symlink_parent / "state"),
+    )
+    for data_folder in rejected:
+        environment = os.environ.copy()
+        if data_folder is None:
+            environment.pop("DATA_FOLDER", None)
+        else:
+            environment["DATA_FOLDER"] = data_folder
+        result = subprocess.run(
+            [str(script)],
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert result.returncode != 0, data_folder
+        assert "DATA_FOLDER" in result.stderr
+
+
+def test_compose_operator_entry_runs_data_folder_preflight_before_compose() -> None:
+    wrapper_path = ROOT / "scripts/compose.sh"
+    assert wrapper_path.is_file()
+    wrapper = wrapper_path.read_text(encoding="utf-8")
+
+    assert '"$SCRIPT_DIR/preflight-data-folder.sh"' in wrapper
+    assert 'exec docker compose "$@"' in wrapper
 
 
 def test_compose_and_image_apply_non_root_immutable_runtime_hardening() -> None:
@@ -503,16 +609,19 @@ def test_readme_documents_the_operator_workflows_and_safety_boundaries() -> None
         "## Notification destinations",
         "## Recovery and backup",
         "## Financial-risk boundary",
-        "./data/smc_ict.db",
+        '"$DATA_FOLDER/smc_ict.db"',
         "/data/smc_ict.db",
-        "docker compose up -d --build",
-        "sqlite3 ./data/smc_ict.db '.backup",
+        "./scripts/compose.sh up -d --build",
+        'sqlite3 "$DATA_FOLDER/smc_ict.db"',
         "smc-ict notifier-test",
     ):
         assert section in readme
 
     assert "The Compose health command reads the scheduler readiness marker" in readme
     assert "The Compose health command reads `/data/smc_ict.db`" not in readme
+    assert "--config-root config" in readme
+    assert "--config-root ." not in readme
+    assert "./data" not in readme
 
 
 def test_operator_docs_cover_the_single_secret_release_workflow_and_runtime_evidence() -> None:
@@ -522,16 +631,16 @@ def test_operator_docs_cover_the_single_secret_release_workflow_and_runtime_evid
     operator_docs = "\n".join((readme, operations, configuration))
 
     for required_command in (
-        "install -d -m 0750 -o 10001 -g 10001 data",
+        'install -d -m 0750 -o 10001 -g 10001 "$DATA_FOLDER"',
         "secrets/discord_webhook_url",
         'export SMC_ICT_GIT_COMMIT="$(git rev-parse HEAD)"',
-        "docker compose build engine",
-        "docker compose up -d engine",
-        "docker compose ps",
-        "docker compose logs --tail 100 engine",
-        "smc-ict database status --database /data/smc_ict.db",
-        "docker compose --profile manual run --rm manual run",
-        "docker compose down",
+        "./scripts/compose.sh build engine",
+        "./scripts/compose.sh up -d engine",
+        "./scripts/compose.sh ps",
+        "./scripts/compose.sh logs --tail 100 engine",
+        'smc-ict database status --database "$DATA_FOLDER/smc_ict.db"',
+        "./scripts/compose.sh --profile manual run --rm manual run",
+        "./scripts/compose.sh down",
     ):
         assert required_command in operations
 
@@ -542,6 +651,7 @@ def test_operator_docs_cover_the_single_secret_release_workflow_and_runtime_evid
     assert "DISCORD_1_WEBHOOK_URL" not in operator_docs
     assert "discord_2_webhook_url" not in operator_docs
     assert "https://" not in operator_docs
+    assert "./data" not in operations
 
 
 def test_required_operator_document_set_is_present_and_cross_linked() -> None:
@@ -549,7 +659,7 @@ def test_required_operator_document_set_is_present_and_cross_linked() -> None:
         "concepts.md": "research-only",
         "strategy-authoring.md": "seven implemented registrations",
         "configuration.md": "config/notifications.yaml",
-        "operations.md": "docker compose stop --timeout 30 engine",
+        "operations.md": "./scripts/compose.sh stop --timeout 30 engine",
         "troubleshooting.md": "PROCESS_RESTART",
         "architecture.md": "five tables",
         "formula-provenance.md": "active source locators",
@@ -559,7 +669,7 @@ def test_required_operator_document_set_is_present_and_cross_linked() -> None:
         assert boundary in document
 
     env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
-    assert env_example == "SMC_ICT_GIT_COMMIT=\nDATA_FOLDER=./data\n"
+    assert env_example == "SMC_ICT_GIT_COMMIT=\nDATA_FOLDER=/absolute/path/to/smc-ict-data\n"
 
 
 def test_schema_uses_json_validation_supported_by_the_container_sqlite() -> None:

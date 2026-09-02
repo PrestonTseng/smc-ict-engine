@@ -151,8 +151,13 @@ def run_once(
 def _host_config_path(container_path: str, config_root: str | Path) -> Path:
     if Path(config_root) == Path("/"):
         return Path(container_path)
-    relative = PurePosixPath(container_path).relative_to("/config")
-    return Path(config_root).joinpath(*relative.parts)
+    path = PurePosixPath(container_path)
+    config = Path(config_root)
+    if path.is_relative_to("/config"):
+        relative = path.relative_to("/config")
+        return config.joinpath(*relative.parts)
+    relative = path.relative_to("/strategies")
+    return config.parent.joinpath("strategies", *relative.parts)
 
 
 class _ManagedSubprocessOperation:

@@ -8,6 +8,33 @@ from threading import Event, Thread
 import pytest
 
 
+@pytest.mark.parametrize(
+    ("config_root", "container_path", "expected"),
+    [
+        (Path("/"), "/config/market-data.yaml", Path("/config/market-data.yaml")),
+        (Path("/"), "/strategies/research.yaml", Path("/strategies/research.yaml")),
+        (Path("/config"), "/config/market-data.yaml", Path("/config/market-data.yaml")),
+        (Path("/config"), "/strategies/research.yaml", Path("/strategies/research.yaml")),
+        (
+            Path("/srv/smc/config"),
+            "/config/market-data.yaml",
+            Path("/srv/smc/config/market-data.yaml"),
+        ),
+        (
+            Path("/srv/smc/config"),
+            "/strategies/research.yaml",
+            Path("/srv/smc/strategies/research.yaml"),
+        ),
+    ],
+)
+def test_scheduler_translates_both_read_only_roots_for_every_config_root_mode(
+    config_root: Path, container_path: str, expected: Path
+) -> None:
+    from smc_ict.composition.runtime_services import _host_config_path
+
+    assert _host_config_path(container_path, config_root) == expected
+
+
 def test_active_schedule_fires_one_minute_after_each_completed_15m_boundary() -> None:
     from apscheduler.triggers.cron import CronTrigger
 

@@ -249,6 +249,36 @@ def test_schedule_accepts_only_utc_strict_bounds_paths_and_cron() -> None:
             a["load_schedule_text"](SCHEDULE.replace(old, new))
 
 
+@pytest.mark.parametrize(
+    "strategy_path",
+    ["/config/strategy.yaml", "/strategies/strategy.yml"],
+)
+def test_schedule_accepts_each_supported_read_only_root(strategy_path: str) -> None:
+    a = api()
+    config = a["load_schedule_text"](
+        SCHEDULE.replace("/config/strategies/source-aligned-research.yaml", strategy_path)
+    )
+    assert config.jobs[0].strategy == strategy_path
+
+
+@pytest.mark.parametrize(
+    "strategy_path",
+    [
+        "strategies/strategy.yaml",
+        "/unsupported/strategy.yaml",
+        "/config/../strategy.yaml",
+        "/strategies/../strategy.yaml",
+        "/config/strategy.json",
+    ],
+)
+def test_schedule_rejects_relative_escape_and_unsupported_paths(strategy_path: str) -> None:
+    a = api()
+    with pytest.raises(a["StrictConfigurationError"]):
+        a["load_schedule_text"](
+            SCHEDULE.replace("/config/strategies/source-aligned-research.yaml", strategy_path)
+        )
+
+
 def test_notifications_load_two_destinations_without_retaining_secrets() -> None:
     a = api()
     config = a["load_notifications_text"](NOTIFICATIONS, **notification_kwargs())
