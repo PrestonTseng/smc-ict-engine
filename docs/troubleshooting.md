@@ -12,7 +12,7 @@ If the engine lock remains held, find the owner before you stop it:
 
 ```sh
 lsof "$DATA_FOLDER/engine.lock"
-./scripts/compose.sh ps
+docker compose ps
 ```
 
 Do not delete an active lock file. The lock uses the inode, and file deletion can permit a second owner.

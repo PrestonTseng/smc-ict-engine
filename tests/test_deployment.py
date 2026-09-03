@@ -543,63 +543,22 @@ def test_protected_mount_probe_rejects_each_writable_target(
         )
 
 
-def test_data_folder_preflight_accepts_only_real_absolute_directories(tmp_path: Path) -> None:
-    script = ROOT / "scripts/preflight-data-folder.sh"
-    assert script.is_file()
-    valid = tmp_path / "state with spaces"
-    valid.mkdir()
-    regular_file = tmp_path / "not-a-directory"
-    regular_file.write_text("fixture\n", encoding="utf-8")
-    real_parent = tmp_path / "real-parent"
-    real_parent.mkdir()
-    (real_parent / "state").mkdir()
-    symlink_leaf = tmp_path / "state-link"
-    symlink_leaf.symlink_to(valid, target_is_directory=True)
-    symlink_parent = tmp_path / "parent-link"
-    symlink_parent.symlink_to(real_parent, target_is_directory=True)
-
-    accepted = subprocess.run(
-        [str(script)],
-        env={**os.environ, "DATA_FOLDER": str(valid)},
-        text=True,
-        capture_output=True,
-        check=False,
+def test_compose_operator_contract_uses_direct_commands_and_native_guards() -> None:
+    compose_text = (ROOT / "compose.yaml").read_text(encoding="utf-8")
+    operator_docs = "\n".join(
+        (ROOT / filename).read_text(encoding="utf-8")
+        for filename in ("README.md", "docs/operations.md", "docs/troubleshooting.md")
     )
-    assert accepted.returncode == 0, accepted.stderr
 
-    rejected = (
-        None,
-        "",
-        "relative/data",
-        str(tmp_path / "missing"),
-        str(regular_file),
-        str(symlink_leaf),
-        str(symlink_parent / "state"),
-    )
-    for data_folder in rejected:
-        environment = os.environ.copy()
-        if data_folder is None:
-            environment.pop("DATA_FOLDER", None)
-        else:
-            environment["DATA_FOLDER"] = data_folder
-        result = subprocess.run(
-            [str(script)],
-            env=environment,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        assert result.returncode != 0, data_folder
-        assert "DATA_FOLDER" in result.stderr
-
-
-def test_compose_operator_entry_runs_data_folder_preflight_before_compose() -> None:
-    wrapper_path = ROOT / "scripts/compose.sh"
-    assert wrapper_path.is_file()
-    wrapper = wrapper_path.read_text(encoding="utf-8")
-
-    assert '"$SCRIPT_DIR/preflight-data-folder.sh"' in wrapper
-    assert 'exec docker compose "$@"' in wrapper
+    assert not (ROOT / "scripts/compose.sh").exists()
+    assert not (ROOT / "scripts/preflight-data-folder.sh").exists()
+    assert "./scripts/compose.sh" not in operator_docs
+    assert "scripts/preflight-data-folder.sh" not in operator_docs
+    assert "docker compose config --quiet" in operator_docs
+    assert "docker compose up -d engine" in operator_docs
+    assert "docker compose ps" in operator_docs
+    assert "${DATA_FOLDER:?Set DATA_FOLDER to the writable host data directory}" in compose_text
+    assert compose_text.count("create_host_path: false") == 3
 
 
 def test_compose_and_image_apply_non_root_immutable_runtime_hardening() -> None:
@@ -759,7 +718,7 @@ def test_readme_documents_the_operator_workflows_and_safety_boundaries() -> None
         "## Financial-risk boundary",
         '"$DATA_FOLDER/smc_ict.db"',
         "/data/smc_ict.db",
-        "./scripts/compose.sh up -d --build",
+        "docker compose up -d --build",
         'sqlite3 "$DATA_FOLDER/smc_ict.db"',
         "smc-ict notifier-test",
     ):
@@ -782,13 +741,13 @@ def test_operator_docs_cover_the_single_secret_release_workflow_and_runtime_evid
         'install -d -m 0750 -o 10001 -g 10001 "$DATA_FOLDER"',
         "secrets/discord_webhook_url",
         'export SMC_ICT_GIT_COMMIT="$(git rev-parse HEAD)"',
-        "./scripts/compose.sh build engine",
-        "./scripts/compose.sh up -d engine",
-        "./scripts/compose.sh ps",
-        "./scripts/compose.sh logs --tail 100 engine",
+        "docker compose build engine",
+        "docker compose up -d engine",
+        "docker compose ps",
+        "docker compose logs --tail 100 engine",
         'smc-ict database status --database "$DATA_FOLDER/smc_ict.db"',
-        "./scripts/compose.sh --profile manual run --rm manual run",
-        "./scripts/compose.sh down",
+        "docker compose --profile manual run --rm manual run",
+        "docker compose down",
     ):
         assert required_command in operations
 
@@ -811,9 +770,8 @@ def test_operator_docs_describe_required_env_and_safe_status_commands() -> None:
         in configuration
     )
     assert 'lsof "$DATA_FOLDER/engine.lock"' in troubleshooting
-    assert "./scripts/compose.sh ps" in troubleshooting
+    assert "docker compose ps" in troubleshooting
     assert "lsof ./data/engine.lock" not in troubleshooting
-    assert "docker compose ps" not in troubleshooting
 
 
 def test_required_operator_document_set_is_present_and_cross_linked() -> None:
@@ -821,7 +779,7 @@ def test_required_operator_document_set_is_present_and_cross_linked() -> None:
         "concepts.md": "research-only",
         "strategy-authoring.md": "seven implemented registrations",
         "configuration.md": "config/notifications.yaml",
-        "operations.md": "./scripts/compose.sh stop --timeout 30 engine",
+        "operations.md": "docker compose stop --timeout 30 engine",
         "troubleshooting.md": "PROCESS_RESTART",
         "architecture.md": "five tables",
         "formula-provenance.md": "active source locators",
