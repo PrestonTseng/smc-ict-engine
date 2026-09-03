@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 from pathlib import Path
 
 from smc_ict.adapters.notifications import DiscordWebhookNotifier
@@ -31,7 +30,7 @@ def must_reject_adapter(unsafe_endpoint: str, destination: NotificationDestinati
     try:
         DiscordWebhookNotifier(
             "discord_debug",
-            replace(destination, endpoint=SecretRef("env", "DISCORD_TEST_ENDPOINT")),
+            destination.model_copy(update={"endpoint": SecretRef("env", "DISCORD_TEST_ENDPOINT")}),
             environ={"DISCORD_TEST_ENDPOINT": unsafe_endpoint},
         )
     except ValueError as exc:

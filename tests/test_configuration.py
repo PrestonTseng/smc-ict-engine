@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import pytest
+from pydantic import BaseModel, ValidationError
 
 MARKET = """\
 market_data:
@@ -164,6 +165,66 @@ def notification_kwargs() -> dict[str, object]:
         "environ": {"DISCORD_1_WEBHOOK_URL": "https://endpoint.invalid/one"},
         "secret_files": {"/run/secrets/discord_2_webhook_url": "https://endpoint.invalid/two"},
     }
+
+
+def test_configuration_models_are_strict_frozen_pydantic_models() -> None:
+    from smc_ict.configuration.models import MarketDataConfig
+
+    assert issubclass(MarketDataConfig, BaseModel)
+    assert MarketDataConfig.model_config["strict"] is True
+    assert MarketDataConfig.model_config["frozen"] is True
+    assert MarketDataConfig.model_config["extra"] == "forbid"
+
+    with pytest.raises(ValidationError):
+        MarketDataConfig.model_validate(
+            {
+                "provider": "binance_usdm",
+                "market_type": "LINEAR_PERPETUAL",
+                "instruments": {"BTC-USDT-PERP": 1},
+            }
+        )
+    with pytest.raises(ValidationError):
+        MarketDataConfig.model_validate(
+            {
+                "provider": "binance_usdm",
+                "market_type": "LINEAR_PERPETUAL",
+                "instruments": {"BTC-USDT-PERP": "BTCUSDT"},
+                "endpoint": "https://example.invalid",
+            }
+        )
+
+
+def test_loaded_configuration_is_deeply_immutable() -> None:
+    a = api()
+    market = a["load_market_data_text"](MARKET)
+    strategy = a["load_strategy_text"](STRATEGY)
+    notifications = a["load_notifications_text"](NOTIFICATIONS, **notification_kwargs())
+
+    with pytest.raises(ValidationError):
+        market.provider = "okx_swap"
+    with pytest.raises(TypeError):
+        market.instruments["BTC-USDT-PERP"] = "changed"
+    with pytest.raises(TypeError):
+        strategy.roles["execution"] = "15m"
+    with pytest.raises(TypeError):
+        strategy.signals[0].parameters["swing_length"] = 10
+    with pytest.raises(TypeError):
+        notifications.destinations["new"] = notifications.destinations["discord_1"]
+
+
+def test_loader_adapts_pydantic_errors_to_stable_public_error() -> None:
+    a = api()
+
+    with pytest.raises(a["StrictConfigurationError"]) as caught:
+        a["load_schedule_text"](
+            SCHEDULE.replace("maximum_runtime_seconds: 900", 'maximum_runtime_seconds: "900"')
+        )
+
+    message = str(caught.value)
+    assert isinstance(caught.value.__cause__, ValidationError)
+    assert "schedule.jobs[0].maximum_runtime_seconds" in message
+    assert "validation error for" not in message
+    assert "errors.pydantic.dev" not in message
 
 
 def test_market_configuration_is_frozen_and_hashes_canonical_json() -> None:
@@ -335,9 +396,12 @@ def test_notifications_loader_preserves_generic_webhook_batch_bound(maximum_even
         ("window_seconds: 300", "window_seconds: true"),
         ("window_seconds: 300", 'window_seconds: "300"'),
         ("timeout_seconds: 5", "timeout_seconds: true"),
+        ("backoff_seconds: [1, 2]", "backoff_seconds: [0, 2]"),
         ("adapter: generic_webhook", "adapter: unknown"),
         ("endpoint: {env: DISCORD_1_WEBHOOK_URL}", "endpoint: {url: https://literal.invalid/hook}"),
         ("enabled_events: [decision_found]", "enabled_events: []"),
+        ("headers: [authorization, cookie, set-cookie]", "headers: []"),
+        ("query_parameters: [token, key, signature]", "query_parameters: []"),
     ],
 )
 def test_notifications_reject_exact_type_bounds_and_closed_sets(old: str, new: str) -> None:
