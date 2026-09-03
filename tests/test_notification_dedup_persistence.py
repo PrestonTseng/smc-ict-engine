@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from smc_ict.adapters.persistence.sqlite import SQLiteRepository
 from smc_ict.application.notifications import NotificationRouter
 from smc_ict.application.ports import (
@@ -90,7 +92,7 @@ class _Adapter:
             "batch" if len(events) > 1 else None,
             1,
             outcome,
-            "REMOTE_FAILURE" if self.fail else None,
+            "HTTP_500" if self.fail else None,
             500 if self.fail else 204,
         )
 
@@ -187,6 +189,150 @@ def test_partial_failure_persists_only_successful_destination_outcomes(tmp_path:
         ("bad", ("run_succeeded",)),
     ]
     assert [item.outcome for item in retried.receipts] == ["SUCCESS", "DEDUPLICATED"]
+
+
+def test_restart_retries_failed_delivery_then_recovers_successful_deduplication(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "runtime.sqlite3"
+    repository = _repository(database)
+    calls: list[tuple[str, tuple[str, ...]]] = []
+    destination = _destination(maximum=1)
+    event = _event("run_succeeded")
+
+    first = _router(
+        repository,
+        {"only": destination},
+        calls,
+        now=100,
+        failing=frozenset({"only"}),
+    ).deliver(event)
+    restarted = SQLiteRepository(database)
+    second = _router(restarted, {"only": destination}, calls, now=101).deliver(event)
+    third = _router(SQLiteRepository(database), {"only": destination}, calls, now=102).deliver(
+        event
+    )
+
+    outcomes = SQLiteRepository(database).load_notification_outcomes("run")
+    assert first.receipts[0].outcome == "FAILURE"
+    assert second.receipts[0].outcome == "SUCCESS"
+    assert third.receipts[0].outcome == "DEDUPLICATED"
+    assert calls == [
+        ("only", ("run_succeeded",)),
+        ("only", ("run_succeeded",)),
+    ]
+    assert [(item.outcome, item.reason_code) for item in outcomes] == [
+        ("FAILURE", "HTTP_500"),
+        ("SUCCESS", None),
+    ]
+
+
+def test_failed_delivery_persists_a_bounded_redacted_outcome(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    database = tmp_path / "runtime.sqlite3"
+    repository = _repository(database)
+    calls: list[tuple[str, tuple[str, ...]]] = []
+
+    with caplog.at_level("INFO", logger="smc_ict.application.notifications"):
+        receipt = _router(
+            repository,
+            {"bad": _destination(maximum=1)},
+            calls,
+            now=123,
+            failing=frozenset({"bad"}),
+        ).deliver(_event("run_succeeded"))
+
+    with sqlite3.connect(database) as connection:
+        encoded = connection.execute(
+            "SELECT notification_outcomes_json FROM runs WHERE run_id='run'"
+        ).fetchone()[0]
+    outcomes = json.loads(encoded)
+
+    assert receipt.outcome == "ALL_FAILURE"
+    assert outcomes == [
+        {
+            "adapter_id": "generic_webhook",
+            "attempted_at_seconds": 123,
+            "attempts": 1,
+            "destination_id": "bad",
+            "outcome": "FAILURE",
+            "reason_code": "HTTP_500",
+            "status_code": 500,
+        }
+    ]
+    assert len(encoded) <= 1_000
+    assert "FICTIONAL_HOOK" not in encoded
+    records = [record for record in caplog.records if record.msg == "notification_delivery_outcome"]
+    assert len(records) == 1
+    assert records[0].destination_id == "bad"
+    assert records[0].adapter_id == "generic_webhook"
+    assert records[0].outcome == "FAILURE"
+    assert records[0].reason_code == "HTTP_500"
+    assert records[0].status_code == 500
+    assert records[0].attempts == 1
+    assert "FICTIONAL_HOOK" not in caplog.text
+
+
+def test_adapter_construction_error_is_mapped_before_persistence_and_logging(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    database = tmp_path / "runtime.sqlite3"
+    repository = _repository(database)
+    secret_text = "https://discord.invalid/api/webhooks/id/FICTIONAL_SECRET"
+    router = NotificationRouter(
+        NotificationConfig(True, frozen_mapping({"discord": _destination(maximum=1)})),
+        adapter_factory=lambda *_args: (_ for _ in ()).throw(ValueError(secret_text)),
+        clock_seconds=lambda: 789,
+        deduplication_store=repository,
+    )
+
+    with caplog.at_level("INFO", logger="smc_ict.application.notifications"):
+        receipt = router.deliver(_event("run_succeeded"))
+
+    outcomes = SQLiteRepository(database).load_notification_outcomes("run")
+    assert receipt.receipts[0].reason_code == "ADAPTER_UNAVAILABLE"
+    assert [(item.attempts, item.reason_code, item.status_code) for item in outcomes] == [
+        (0, "ADAPTER_UNAVAILABLE", None)
+    ]
+    assert secret_text not in caplog.text
+    assert secret_text not in repr(outcomes)
+
+
+def test_successful_delivery_persists_redacted_outcome_and_dedup_state(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    database = tmp_path / "runtime.sqlite3"
+    repository = _repository(database)
+    calls: list[tuple[str, tuple[str, ...]]] = []
+
+    with caplog.at_level("INFO", logger="smc_ict.application.notifications"):
+        receipt = _router(repository, {"good": _destination(maximum=1)}, calls, now=456).deliver(
+            _event("run_succeeded")
+        )
+
+    with sqlite3.connect(database) as connection:
+        encoded_outcomes, encoded_dedup = connection.execute(
+            "SELECT notification_outcomes_json,notification_dedup_json FROM runs WHERE run_id='run'"
+        ).fetchone()
+
+    assert receipt.outcome == "ALL_SUCCESS"
+    assert json.loads(encoded_outcomes) == [
+        {
+            "adapter_id": "generic_webhook",
+            "attempted_at_seconds": 456,
+            "attempts": 1,
+            "destination_id": "good",
+            "outcome": "SUCCESS",
+            "reason_code": None,
+            "status_code": 204,
+        }
+    ]
+    assert len(json.loads(encoded_dedup)) == 1
+    records = [record for record in caplog.records if record.msg == "notification_delivery_outcome"]
+    assert len(records) == 1
+    assert records[0].levelname == "INFO"
+    assert records[0].outcome == "SUCCESS"
 
 
 def test_expired_durable_record_delivers_again_at_window_boundary(tmp_path: Path) -> None:

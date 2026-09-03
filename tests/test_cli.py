@@ -100,6 +100,44 @@ def test_notifier_test_rejects_a_nested_payload_before_secret_resolution(tmp_pat
     assert "payload values must be scalar" in result.stderr
 
 
+def test_cli_structured_logging_emits_only_allowlisted_notification_fields() -> None:
+    script = """
+import logging
+from smc_ict.cli import _configure_logging
+_configure_logging()
+logging.getLogger('smc_ict.application.notifications').info(
+    'notification_delivery_outcome',
+    extra={
+        'destination_id': 'discord_debug',
+        'adapter_id': 'discord_webhook',
+        'attempted_at_seconds': 123,
+        'attempts': 1,
+        'outcome': 'SUCCESS',
+        'reason_code': None,
+        'status_code': 204,
+        'endpoint': 'FICTIONAL_SECRET',
+    },
+)
+"""
+
+    result = subprocess.run(
+        [sys.executable, "-c", script], text=True, capture_output=True, timeout=10, check=False
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stderr) == {
+        "adapter_id": "discord_webhook",
+        "attempted_at_seconds": 123,
+        "attempts": 1,
+        "destination_id": "discord_debug",
+        "event": "notification_delivery_outcome",
+        "outcome": "SUCCESS",
+        "reason_code": None,
+        "status_code": 204,
+    }
+    assert "FICTIONAL_SECRET" not in result.stderr
+
+
 def test_write_makes_a_complete_json_line_visible_while_child_remains_alive() -> None:
     environment = os.environ.copy()
     environment.pop("PYTHONUNBUFFERED", None)

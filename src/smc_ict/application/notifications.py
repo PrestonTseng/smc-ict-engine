@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from hashlib import sha256
@@ -11,12 +12,14 @@ from smc_ict.application.ports.notifications import (
     DeliveryReceipt,
     NotificationDeduplicationStore,
     NotificationDedupRecord,
+    NotificationDeliveryRecord,
     NotificationEvent,
     Notifier,
 )
 from smc_ict.configuration.models import NotificationConfig, NotificationDestination
 
 AdapterFactory = Callable[[str, NotificationDestination], Notifier]
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,40 +143,48 @@ class NotificationRouter:
             if len(eligible) == 1 or not callable(deliver_batch):
                 for event in eligible:
                     receipt = adapter.deliver(event)
-                    if receipt.outcome == "SUCCESS" and not self._record_successes(
-                        destination_id, destination, (event,), now
+                    if receipt.outcome == "SUCCESS" and (
+                        not self._record_outcome(receipt, event.run_id, now)
+                        or not self._record_successes(destination_id, destination, (event,), now)
                     ):
                         receipt = self._deduplication_state_failure(
                             destination_id, destination, event
                         )
+                        self._log_outcome(receipt, now)
+                    elif receipt.outcome == "FAILURE":
+                        self._record_outcome(receipt, event.run_id, now)
                     receipts.append(receipt)
                 return tuple(receipts)
             receipt = deliver_batch(tuple(eligible))
             if not isinstance(receipt, DeliveryReceipt):
                 raise RuntimeError("notification adapter returned an invalid batch receipt")
-            if receipt.outcome == "SUCCESS" and not self._record_successes(
-                destination_id, destination, tuple(eligible), now
+            if receipt.outcome == "SUCCESS" and (
+                not self._record_outcome(receipt, eligible[0].run_id, now)
+                or not self._record_successes(destination_id, destination, tuple(eligible), now)
             ):
                 receipt = self._deduplication_state_failure(
                     destination_id, destination, eligible[0]
                 )
+                self._log_outcome(receipt, now)
+            elif receipt.outcome == "FAILURE":
+                self._record_outcome(receipt, eligible[0].run_id, now)
             receipts.append(receipt)
             return tuple(receipts)
         except (OSError, RuntimeError, ValueError):
             event = batch[0]
-            receipts.append(
-                DeliveryReceipt(
-                    destination_id,
-                    destination.adapter,
-                    self._event_id(event),
-                    self._deduplication_id(destination_id, destination, event),
-                    None,
-                    0,
-                    "FAILURE",
-                    "ADAPTER_UNAVAILABLE",
-                    None,
-                )
+            receipt = DeliveryReceipt(
+                destination_id,
+                destination.adapter,
+                self._event_id(event),
+                self._deduplication_id(destination_id, destination, event),
+                None,
+                0,
+                "FAILURE",
+                "ADAPTER_UNAVAILABLE",
+                None,
             )
+            self._record_outcome(receipt, event.run_id, now)
+            receipts.append(receipt)
             return tuple(receipts)
 
     @staticmethod
@@ -203,7 +214,7 @@ class NotificationRouter:
                 self._adapters[destination_id] = adapter
             receipt = adapter.deliver(event)
         except (OSError, RuntimeError, ValueError):
-            return DeliveryReceipt(
+            receipt = DeliveryReceipt(
                 destination_id,
                 destination.adapter,
                 self._event_id(event),
@@ -214,10 +225,56 @@ class NotificationRouter:
                 "ADAPTER_UNAVAILABLE",
                 None,
             )
+            self._record_outcome(receipt, event.run_id, now)
+            return receipt
         if receipt.outcome == "SUCCESS":
-            if not self._record_successes(destination_id, destination, (event,), now):
-                return self._deduplication_state_failure(destination_id, destination, event)
+            if not self._record_outcome(receipt, event.run_id, now) or not self._record_successes(
+                destination_id, destination, (event,), now
+            ):
+                receipt = self._deduplication_state_failure(destination_id, destination, event)
+                self._log_outcome(receipt, now)
+        else:
+            self._record_outcome(receipt, event.run_id, now)
         return receipt
+
+    def _record_outcome(self, receipt: DeliveryReceipt, run_id: str, now: int) -> bool:
+        try:
+            if self._deduplication_store is not None:
+                self._deduplication_store.store_notification_outcomes(
+                    (
+                        NotificationDeliveryRecord(
+                            run_id,
+                            receipt.destination_id,
+                            receipt.adapter_id,
+                            now,
+                            receipt.attempts,
+                            receipt.outcome,
+                            receipt.reason_code,
+                            receipt.status_code,
+                        ),
+                    )
+                )
+        except Exception:
+            self._log_outcome(receipt, now)
+            return False
+        self._log_outcome(receipt, now)
+        return True
+
+    @staticmethod
+    def _log_outcome(receipt: DeliveryReceipt, now: int) -> None:
+        log = LOGGER.info if receipt.outcome == "SUCCESS" else LOGGER.warning
+        log(
+            "notification_delivery_outcome",
+            extra={
+                "destination_id": receipt.destination_id,
+                "adapter_id": receipt.adapter_id,
+                "attempted_at_seconds": now,
+                "attempts": receipt.attempts,
+                "outcome": receipt.outcome,
+                "reason_code": receipt.reason_code,
+                "status_code": receipt.status_code,
+            },
+        )
 
     def _delivered_at(self, destination_id: str, deduplication_id: str) -> int | None:
         if self._deduplication_store is not None:
