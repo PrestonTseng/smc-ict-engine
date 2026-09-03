@@ -11,7 +11,7 @@ The scheduler found a stale `RUNNING` row after process death. It changed the ro
 If the engine lock remains held, find the owner before you stop it:
 
 ```sh
-lsof ./data/engine.lock
+lsof "$DATA_FOLDER/engine.lock"
 docker compose ps
 ```
 

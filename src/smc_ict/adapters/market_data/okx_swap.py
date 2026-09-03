@@ -40,6 +40,7 @@ class OkxSwapProvider:
         self._request_json = request_json or JsonRequester(self._base_url)
         self._page_limit = page_limit
         self._validated_symbols: set[str] = set()
+        self._server_time_snapshot_ms: int | None = None
 
     def validate_instrument(self, mapping: object) -> None:
         if not isinstance(mapping, InstrumentMapping):
@@ -65,11 +66,15 @@ class OkxSwapProvider:
         self._validated_symbols.add(mapping.provider_symbol)
 
     def server_time_ms(self) -> int:
+        if self._server_time_snapshot_ms is not None:
+            return self._server_time_snapshot_ms
         data = self._okx_data(self._request_json("/api/v5/public/time", {}), "time")
         if len(data) != 1 or type(data[0]) is not dict:
             raise ProviderProtocolError("OKX time response is malformed")
         raw = cast(dict[object, object], data[0]).get("ts")
-        return self._millisecond_text(raw, "OKX server time")
+        snapshot = self._millisecond_text(raw, "OKX server time")
+        self._server_time_snapshot_ms = snapshot
+        return snapshot
 
     def latest_closed_open_time_ms(self) -> int:
         server_time = self.server_time_ms()

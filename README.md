@@ -23,15 +23,16 @@ The Compose service owns the internal scheduler. Do not install host cron for th
 
 The fixed database contract is:
 
-- Host path: `./data/smc_ict.db`
+- Host path: `${DATA_FOLDER}/smc_ict.db`
 - Container path: `/data/smc_ict.db`
-- Bind mount: `./data:/data`
+- Bind mount: `${DATA_FOLDER}:/data` (the only writable application bind)
 
 Bootstrap the writable data directory and the one Discord secret before you start Compose. The
 container runs as UID/GID `10001:10001`, so the host bind must be writable by that identity:
 
 ```bash
-sudo install -d -m 0750 -o 10001 -g 10001 data
+export DATA_FOLDER="/absolute/path/to/smc-ict-data"
+sudo install -d -m 0750 -o 10001 -g 10001 "$DATA_FOLDER"
 install -d -m 0700 secrets
 umask 077
 read -rsp 'Discord webhook URL: ' DISCORD_WEBHOOK_URL && printf '\n'
@@ -52,7 +53,7 @@ Read readiness and logs:
 
 ```sh
 docker compose ps
-docker compose exec engine smc-ict database status --database /data/smc_ict.db
+uv run smc-ict database status --database "$DATA_FOLDER/smc_ict.db"
 docker compose logs --follow engine
 ```
 
@@ -87,8 +88,8 @@ Validation checks YAML structure, types, provider IDs, schedule policy, notifica
 Bootstrap or inspect a local database:
 
 ```sh
-uv run smc-ict database bootstrap --database ./data/smc_ict.db
-uv run smc-ict database status --database ./data/smc_ict.db
+uv run smc-ict database bootstrap --database "$DATA_FOLDER/smc_ict.db"
+uv run smc-ict database status --database "$DATA_FOLDER/smc_ict.db"
 ```
 
 The notifier dry test validates a bounded event payload without a delivery attempt:
@@ -109,8 +110,8 @@ uv run smc-ict run \
   --strategy strategies/source-aligned-research.yaml \
   --market-data config/market-data.yaml \
   --notifications config/notifications.yaml \
-  --database ./data/smc_ict.db \
-  --lock ./data/engine.lock \
+  --database "$DATA_FOLDER/smc_ict.db" \
+  --lock "$DATA_FOLDER/engine.lock" \
   --trigger manual
 ```
 
@@ -121,9 +122,9 @@ Start the scheduler outside Compose only for local diagnosis:
 ```sh
 uv run smc-ict scheduler \
   --schedule config/schedule.yaml \
-  --database ./data/smc_ict.db \
-  --lock ./data/engine.lock \
-  --config-root .
+  --database "$DATA_FOLDER/smc_ict.db" \
+  --lock "$DATA_FOLDER/engine.lock" \
+  --config-root config
 ```
 
 ## Strategy DAG authoring
@@ -149,7 +150,7 @@ Stop the engine before a backup or restore. SQLite backups must use a consistent
 ```sh
 docker compose stop engine
 mkdir -p backups
-sqlite3 ./data/smc_ict.db '.backup backups/smc_ict.db'
+sqlite3 "$DATA_FOLDER/smc_ict.db" '.backup backups/smc_ict.db'
 sqlite3 backups/smc_ict.db 'PRAGMA integrity_check;'
 ```
 
@@ -157,7 +158,7 @@ Restore only after you stop the service:
 
 ```sh
 docker compose stop engine
-cp backups/smc_ict.db ./data/smc_ict.db
+cp backups/smc_ict.db "$DATA_FOLDER/smc_ict.db"
 docker compose up -d engine
 ```
 
@@ -172,7 +173,7 @@ docker compose logs --tail 100 engine
 If a process dies, start the service again. The advisory lock releases when the process dies. Scheduler startup marks stale `RUNNING` receipts as `FAILED` with `PROCESS_RESTART`. If the lock remains held, identify the process before you stop it:
 
 ```sh
-lsof ./data/engine.lock
+lsof "$DATA_FOLDER/engine.lock"
 docker compose ps
 docker compose restart engine
 ```

@@ -1,14 +1,101 @@
 from __future__ import annotations
 
+import json
+import os
 import subprocess
 import tarfile
 import zipfile
 from pathlib import Path
 
+import pytest
 from ruamel.yaml import YAML
 
 ROOT = Path(__file__).parents[1]
 UV_0_11_6_INDEX_DIGEST = "sha256:b1e699368d24c57cda93c338a57a8c5a119009ba809305cc8e86986d4a006754"
+PROTECTED_MOUNT_PROBE = """set -eu;
+probe=/data/.mount-write-probe;
+: > "$probe";
+test -f "$probe";
+rm "$probe";
+test ! -e "$probe";
+if touch /config/.mount-write-probe; then
+    rm -f /config/.mount-write-probe;
+    exit 1;
+fi;
+if touch /strategies/.mount-write-probe; then
+    rm -f /strategies/.mount-write-probe;
+    exit 1;
+fi;
+if touch /run/secrets/discord_webhook_url; then
+    exit 1;
+fi;
+echo PROBE_OK
+"""
+
+
+def _daemon_visible_project_fixture_candidates() -> tuple[Path, ...]:
+    return (
+        ROOT,
+        Path("/Users/preston/Repository/agents/tools/smc-ict-engine"),
+    )
+
+
+def _daemon_visible_project_fixture(candidates: tuple[Path, ...] | None = None) -> Path:
+    failures: list[str] = []
+    for candidate in candidates or _daemon_visible_project_fixture_candidates():
+        probe = subprocess.run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--mount",
+                f"type=bind,source={candidate},target=/fixture,readonly",
+                "busybox:1.37.0",
+                "sh",
+                "-c",
+                (
+                    "test -d /fixture/config && "
+                    "test -d /fixture/strategies && "
+                    "test -f /fixture/README.md"
+                ),
+            ],
+            text=True,
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
+        if probe.returncode == 0:
+            return candidate
+        failures.append(f"{candidate}: exit {probe.returncode}: {probe.stderr.strip()}")
+    raise AssertionError("no daemon-visible project fixture found:\n" + "\n".join(failures))
+
+
+def test_daemon_visible_project_fixture_survives_a_missing_host_candidate() -> None:
+    missing_candidate = Path("/daemon-host/path-that-must-not-exist/smc-ict-engine")
+
+    fixture = _daemon_visible_project_fixture(
+        (missing_candidate, *_daemon_visible_project_fixture_candidates())
+    )
+
+    assert fixture != missing_candidate
+    probe = subprocess.run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "--mount",
+            f"type=bind,source={fixture},target=/fixture,readonly",
+            "busybox:1.37.0",
+            "sh",
+            "-c",
+            "test -d /fixture/config && test -d /fixture/strategies && test -f /fixture/README.md",
+        ],
+        text=True,
+        capture_output=True,
+        timeout=60,
+        check=False,
+    )
+    assert probe.returncode == 0, probe.stderr
 
 
 def test_packages_exclude_deterministic_fictional_runtime_and_secret_material(
@@ -79,10 +166,31 @@ def test_compose_contract_keeps_the_database_in_the_required_bind_mount() -> Non
         "/data/engine.lock",
         "--health-file",
         "/data/scheduler.ready",
+        "--config-root",
+        "/",
     ]
-    assert "./data:/data" in service["volumes"]
-    assert "./config:/config:ro" in service["volumes"]
-    assert "./strategies:/config/strategies:ro" in service["volumes"]
+    assert service["volumes"] == [
+        {
+            "type": "bind",
+            "source": "${DATA_FOLDER:?Set DATA_FOLDER to the writable host data directory}",
+            "target": "/data",
+            "bind": {"create_host_path": False},
+        },
+        {
+            "type": "bind",
+            "source": "./config",
+            "target": "/config",
+            "read_only": True,
+            "bind": {"create_host_path": False},
+        },
+        {
+            "type": "bind",
+            "source": "./strategies",
+            "target": "/strategies",
+            "read_only": True,
+            "bind": {"create_host_path": False},
+        },
+    ]
     assert service["healthcheck"]["test"] == [
         "CMD",
         "smc-ict",
@@ -90,6 +198,367 @@ def test_compose_contract_keeps_the_database_in_the_required_bind_mount() -> Non
         "--health-file",
         "/data/scheduler.ready",
     ]
+
+
+def test_compose_avoids_the_legacy_nested_read_only_bind_mount_and_starts_a_fresh_probe(
+    tmp_path: Path,
+) -> None:
+    compose = YAML(typ="safe").load((ROOT / "compose.yaml").read_text(encoding="utf-8"))
+    engine = compose["services"]["engine"]
+
+    assert engine["volumes"] == [
+        {
+            "type": "bind",
+            "source": "${DATA_FOLDER:?Set DATA_FOLDER to the writable host data directory}",
+            "target": "/data",
+            "bind": {"create_host_path": False},
+        },
+        {
+            "type": "bind",
+            "source": "./config",
+            "target": "/config",
+            "read_only": True,
+            "bind": {"create_host_path": False},
+        },
+        {
+            "type": "bind",
+            "source": "./strategies",
+            "target": "/strategies",
+            "read_only": True,
+            "bind": {"create_host_path": False},
+        },
+    ]
+    assert engine["command"][0:2] == ["scheduler", "--schedule"]
+    assert engine["command"][-2:] == ["--config-root", "/"]
+
+    host_fixture = _daemon_visible_project_fixture()
+    host_config = host_fixture / "config"
+    host_strategies = host_fixture / "strategies"
+    host_secret_fixture = host_fixture / "README.md"
+    legacy = tmp_path / "legacy-compose.yaml"
+    legacy.write_text(
+        f"""services:
+  probe:
+    image: busybox:1.37.0
+    read_only: true
+    command: [\"sh\", \"-c\", \"true\"]
+    volumes:
+      - type: bind
+        source: {host_strategies}
+        target: /config
+        read_only: true
+        bind: {{create_host_path: false}}
+      - type: bind
+        source: {host_config}
+        target: /config/strategies
+        read_only: true
+        bind: {{create_host_path: false}}
+""",
+        encoding="utf-8",
+    )
+    legacy_project = f"legacy-mount-contract-{os.getpid()}"
+    repaired = tmp_path / "repaired-compose.yaml"
+    repaired.write_text(
+        f"""services:
+  probe:
+    image: busybox:1.37.0
+    user: \"10001:10001\"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [\"no-new-privileges:true\"]
+    tmpfs: [\"/tmp:rw,noexec,nosuid,size=16m\"]
+    command: ["sh", "-c", {json.dumps(PROTECTED_MOUNT_PROBE.replace("$", "$$"))}]
+    volumes:
+      - type: volume
+        source: probe_data
+        target: /data
+      - type: bind
+        source: {host_config}
+        target: /config
+        read_only: true
+        bind: {{create_host_path: false}}
+      - type: bind
+        source: {host_strategies}
+        target: /strategies
+        read_only: true
+        bind: {{create_host_path: false}}
+    secrets:
+      - discord_webhook_url
+secrets:
+  discord_webhook_url:
+    file: {host_secret_fixture}
+volumes:
+  probe_data:
+""",
+        encoding="utf-8",
+    )
+    repaired_project = f"repaired-mount-contract-{os.getpid()}"
+    ownership_container = f"{repaired_project}-data-owner"
+    try:
+        legacy_start = subprocess.run(
+            [
+                "docker",
+                "compose",
+                "-p",
+                legacy_project,
+                "-f",
+                str(legacy),
+                "up",
+                "--abort-on-container-exit",
+            ],
+            cwd=tmp_path,
+            text=True,
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
+        assert legacy_start.returncode != 0
+        assert "create mountpoint for /config/strategies mount" in legacy_start.stderr
+        assert "read-only file system" in legacy_start.stderr
+
+        repaired_create = subprocess.run(
+            [
+                "docker",
+                "compose",
+                "-p",
+                repaired_project,
+                "-f",
+                str(repaired),
+                "create",
+            ],
+            cwd=tmp_path,
+            text=True,
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
+        assert repaired_create.returncode == 0, repaired_create.stderr
+        container_id = subprocess.run(
+            [
+                "docker",
+                "compose",
+                "-p",
+                repaired_project,
+                "-f",
+                str(repaired),
+                "ps",
+                "--all",
+                "-q",
+                "probe",
+            ],
+            cwd=tmp_path,
+            text=True,
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
+        assert container_id.returncode == 0, container_id.stderr
+        assert container_id.stdout.strip()
+        inspection = subprocess.run(
+            ["docker", "inspect", container_id.stdout.strip()],
+            text=True,
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
+        assert inspection.returncode == 0, inspection.stderr
+        container = json.loads(inspection.stdout)[0]
+        mounts = {mount["Destination"]: mount for mount in container["Mounts"]}
+        assert [mount["Destination"] for mount in container["Mounts"] if mount["RW"]] == ["/data"]
+        assert mounts["/data"]["Type"] == "volume"
+        initialize_data = subprocess.run(
+            [
+                "docker",
+                "run",
+                "--name",
+                ownership_container,
+                "--user",
+                "0:0",
+                "--volume",
+                f"{mounts['/data']['Name']}:/data",
+                "busybox:1.37.0",
+                "chown",
+                "10001:10001",
+                "/data",
+            ],
+            text=True,
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
+        assert initialize_data.returncode == 0, initialize_data.stderr
+        assert mounts["/config"]["RW"] is False
+        assert mounts["/strategies"]["RW"] is False
+        assert mounts["/run/secrets/discord_webhook_url"]["RW"] is False
+        assert container["Config"]["User"] == "10001:10001"
+        assert container["HostConfig"]["ReadonlyRootfs"] is True
+        assert container["HostConfig"]["CapDrop"] == ["ALL"]
+        assert container["HostConfig"]["SecurityOpt"] == ["no-new-privileges:true"]
+        assert container["HostConfig"]["Tmpfs"] == {"/tmp": "rw,noexec,nosuid,size=16m"}
+        repaired_start = subprocess.run(
+            ["docker", "start", "-a", container_id.stdout.strip()],
+            text=True,
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
+        assert repaired_start.returncode == 0, repaired_start.stderr
+        assert repaired_start.stdout.strip().endswith("PROBE_OK")
+    finally:
+        subprocess.run(
+            ["docker", "rm", "--force", ownership_container],
+            text=True,
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
+        subprocess.run(
+            [
+                "docker",
+                "compose",
+                "-p",
+                repaired_project,
+                "-f",
+                str(repaired),
+                "down",
+                "--volumes",
+            ],
+            cwd=tmp_path,
+            text=True,
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
+        subprocess.run(
+            [
+                "docker",
+                "compose",
+                "-p",
+                legacy_project,
+                "-f",
+                str(legacy),
+                "down",
+                "--volumes",
+            ],
+            cwd=tmp_path,
+            text=True,
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
+        for project in (legacy_project, repaired_project):
+            for resource_command in (
+                ["docker", "ps", "--all", "--quiet"],
+                ["docker", "network", "ls", "--quiet"],
+                ["docker", "volume", "ls", "--quiet"],
+            ):
+                remaining = subprocess.run(
+                    [
+                        *resource_command,
+                        "--filter",
+                        f"label=com.docker.compose.project={project}",
+                    ],
+                    text=True,
+                    capture_output=True,
+                    timeout=60,
+                    check=False,
+                )
+                assert remaining.returncode == 0, remaining.stderr
+                assert remaining.stdout.strip() == ""
+
+
+@pytest.mark.parametrize(
+    "writable_target",
+    (None, "/config", "/strategies", "/run/secrets/discord_webhook_url"),
+    ids=("hardened", "writable-config", "writable-strategies", "writable-secret"),
+)
+def test_protected_mount_probe_rejects_each_writable_target(
+    writable_target: str | None,
+) -> None:
+    host_fixture = _daemon_visible_project_fixture()
+    protected_mounts = {
+        "/config": host_fixture / "config",
+        "/strategies": host_fixture / "strategies",
+        "/run/secrets/discord_webhook_url": host_fixture / "README.md",
+    }
+    container_name = (
+        f"protected-mount-probe-{os.getpid()}-"
+        f"{(writable_target or 'hardened').replace('/', '-').strip('-')}"
+    )
+    command = [
+        "docker",
+        "run",
+        "--name",
+        container_name,
+        "--rm",
+        "--user",
+        "10001:10001",
+        "--read-only",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges:true",
+        "--tmpfs",
+        "/tmp:rw,noexec,nosuid,size=16m",
+        "--tmpfs",
+        "/data:rw,noexec,nosuid,mode=1777,size=16m",
+    ]
+    for target, source in protected_mounts.items():
+        if target == writable_target:
+            tmpfs_target = "/run/secrets" if target.startswith("/run/secrets/") else target
+            command.extend(("--tmpfs", f"{tmpfs_target}:rw,noexec,nosuid,mode=1777,size=16m"))
+        else:
+            command.extend(
+                (
+                    "--mount",
+                    f"type=bind,source={source},target={target},readonly",
+                )
+            )
+    command.extend(("busybox:1.37.0", "sh", "-c", PROTECTED_MOUNT_PROBE))
+
+    try:
+        result = subprocess.run(
+            command,
+            text=True,
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
+        if writable_target is None:
+            assert result.returncode == 0, result.stderr
+            assert result.stdout.strip().endswith("PROBE_OK")
+        else:
+            assert result.returncode == 1, (
+                f"probe did not reject writable target {writable_target}: "
+                f"stdout={result.stdout!r}, stderr={result.stderr!r}"
+            )
+            assert "PROBE_OK" not in result.stdout
+    finally:
+        subprocess.run(
+            ["docker", "rm", "--force", container_name],
+            text=True,
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
+
+
+def test_compose_operator_contract_uses_direct_commands_and_native_guards() -> None:
+    compose_text = (ROOT / "compose.yaml").read_text(encoding="utf-8")
+    operator_docs = "\n".join(
+        (ROOT / filename).read_text(encoding="utf-8")
+        for filename in ("README.md", "docs/operations.md", "docs/troubleshooting.md")
+    )
+
+    assert not (ROOT / "scripts/compose.sh").exists()
+    assert not (ROOT / "scripts/preflight-data-folder.sh").exists()
+    assert "./scripts/compose.sh" not in operator_docs
+    assert "scripts/preflight-data-folder.sh" not in operator_docs
+    assert "docker compose config --quiet" in operator_docs
+    assert "docker compose up -d engine" in operator_docs
+    assert "docker compose ps" in operator_docs
+    assert "${DATA_FOLDER:?Set DATA_FOLDER to the writable host data directory}" in compose_text
+    assert compose_text.count("create_host_path: false") == 3
 
 
 def test_compose_and_image_apply_non_root_immutable_runtime_hardening() -> None:
@@ -247,16 +716,19 @@ def test_readme_documents_the_operator_workflows_and_safety_boundaries() -> None
         "## Notification destinations",
         "## Recovery and backup",
         "## Financial-risk boundary",
-        "./data/smc_ict.db",
+        '"$DATA_FOLDER/smc_ict.db"',
         "/data/smc_ict.db",
         "docker compose up -d --build",
-        "sqlite3 ./data/smc_ict.db '.backup",
+        'sqlite3 "$DATA_FOLDER/smc_ict.db"',
         "smc-ict notifier-test",
     ):
         assert section in readme
 
     assert "The Compose health command reads the scheduler readiness marker" in readme
     assert "The Compose health command reads `/data/smc_ict.db`" not in readme
+    assert "--config-root config" in readme
+    assert "--config-root ." not in readme
+    assert "./data" not in readme
 
 
 def test_operator_docs_cover_the_single_secret_release_workflow_and_runtime_evidence() -> None:
@@ -266,14 +738,14 @@ def test_operator_docs_cover_the_single_secret_release_workflow_and_runtime_evid
     operator_docs = "\n".join((readme, operations, configuration))
 
     for required_command in (
-        "install -d -m 0750 -o 10001 -g 10001 data",
+        'install -d -m 0750 -o 10001 -g 10001 "$DATA_FOLDER"',
         "secrets/discord_webhook_url",
         'export SMC_ICT_GIT_COMMIT="$(git rev-parse HEAD)"',
         "docker compose build engine",
         "docker compose up -d engine",
         "docker compose ps",
         "docker compose logs --tail 100 engine",
-        "smc-ict database status --database /data/smc_ict.db",
+        'smc-ict database status --database "$DATA_FOLDER/smc_ict.db"',
         "docker compose --profile manual run --rm manual run",
         "docker compose down",
     ):
@@ -286,6 +758,20 @@ def test_operator_docs_cover_the_single_secret_release_workflow_and_runtime_evid
     assert "DISCORD_1_WEBHOOK_URL" not in operator_docs
     assert "discord_2_webhook_url" not in operator_docs
     assert "https://" not in operator_docs
+    assert "./data" not in operations
+
+
+def test_operator_docs_describe_required_env_and_safe_status_commands() -> None:
+    configuration = (ROOT / "docs/configuration.md").read_text(encoding="utf-8")
+    troubleshooting = (ROOT / "docs/troubleshooting.md").read_text(encoding="utf-8")
+
+    assert (
+        "immutable image revision and required absolute `DATA_FOLDER` configuration"
+        in configuration
+    )
+    assert 'lsof "$DATA_FOLDER/engine.lock"' in troubleshooting
+    assert "docker compose ps" in troubleshooting
+    assert "lsof ./data/engine.lock" not in troubleshooting
 
 
 def test_required_operator_document_set_is_present_and_cross_linked() -> None:
@@ -303,7 +789,7 @@ def test_required_operator_document_set_is_present_and_cross_linked() -> None:
         assert boundary in document
 
     env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
-    assert env_example == "SMC_ICT_GIT_COMMIT=\n"
+    assert env_example == "SMC_ICT_GIT_COMMIT=\nDATA_FOLDER=/absolute/path/to/smc-ict-data\n"
 
 
 def test_schema_uses_json_validation_supported_by_the_container_sqlite() -> None:

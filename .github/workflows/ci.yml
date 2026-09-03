@@ -108,7 +108,7 @@ jobs:
               sdist_names = [member.name for member in archive.getmembers()]
           reject_forbidden(wheel_names)
           reject_forbidden(sdist_names)
-          if len(wheel_names) != 51 or len(sdist_names) != 100:
+          if len(wheel_names) != 52 or len(sdist_names) != 101:
               raise SystemExit(
                   f"package member boundary drift: wheel={len(wheel_names)} sdist={len(sdist_names)}"
               )
