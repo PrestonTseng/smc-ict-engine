@@ -555,27 +555,19 @@ class SQLiteRepository:
                 ).fetchone()
                 if row is None:
                     raise KeyError("unknown notification run identity")
-                try:
-                    current = json.loads(row[0])
-                except (json.JSONDecodeError, TypeError) as exc:
-                    raise RuntimeError("invalid notification outcome state") from exc
-                if type(current) is not list:
-                    raise RuntimeError("invalid notification outcome state")
-                current.extend(
-                    {
-                        "destination_id": record.destination_id,
-                        "adapter_id": record.adapter_id,
-                        "attempted_at_seconds": record.attempted_at_seconds,
-                        "attempts": record.attempts,
-                        "outcome": record.outcome,
-                        "reason_code": record.reason_code,
-                        "status_code": record.status_code,
-                    }
-                    for record in additions
-                )
+                current = self._notification_outcome_records(row[0], run_id)
+                current.extend(additions)
                 connection.execute(
                     "UPDATE runs SET notification_outcomes_json=? WHERE run_id=?",
-                    (self._canonical_json(current[-100:]), run_id),
+                    (
+                        self._canonical_json(
+                            [
+                                self._notification_outcome_payload(record)
+                                for record in current[-100:]
+                            ]
+                        ),
+                        run_id,
+                    ),
                 )
             connection.commit()
         except Exception:
@@ -591,9 +583,17 @@ class SQLiteRepository:
             ).fetchone()
         if row is None:
             raise KeyError("unknown notification run identity")
+        return tuple(self._notification_outcome_records(row[0], run_id))
+
+    @classmethod
+    def _notification_outcome_records(
+        cls, encoded: object, run_id: str
+    ) -> list[NotificationDeliveryRecord]:
+        if type(encoded) is not str:
+            raise RuntimeError("invalid notification outcome state")
         try:
-            payload = json.loads(row[0])
-        except (json.JSONDecodeError, TypeError) as exc:
+            payload = json.loads(encoded)
+        except json.JSONDecodeError as exc:
             raise RuntimeError("invalid notification outcome state") from exc
         fields = {
             "destination_id",
@@ -612,11 +612,23 @@ class SQLiteRepository:
                 raise RuntimeError("invalid notification outcome state")
             record = NotificationDeliveryRecord(run_id=run_id, **item)
             try:
-                self._validate_notification_outcome(record)
+                cls._validate_notification_outcome(record)
             except (TypeError, ValueError) as exc:
                 raise RuntimeError("invalid notification outcome state") from exc
             records.append(record)
-        return tuple(records)
+        return records
+
+    @staticmethod
+    def _notification_outcome_payload(record: NotificationDeliveryRecord) -> dict[str, object]:
+        return {
+            "destination_id": record.destination_id,
+            "adapter_id": record.adapter_id,
+            "attempted_at_seconds": record.attempted_at_seconds,
+            "attempts": record.attempts,
+            "outcome": record.outcome,
+            "reason_code": record.reason_code,
+            "status_code": record.status_code,
+        }
 
     @staticmethod
     def _validate_notification_outcome(record: NotificationDeliveryRecord) -> None:

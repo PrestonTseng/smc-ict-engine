@@ -4,6 +4,7 @@ import json
 import sqlite3
 import subprocess
 import sys
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,7 @@ from smc_ict.application.notifications import NotificationRouter
 from smc_ict.application.ports import (
     DeliveryReceipt,
     NotificationDedupRecord,
+    NotificationDeliveryRecord,
     NotificationEvent,
     RunRecord,
 )
@@ -333,6 +335,150 @@ def test_successful_delivery_persists_redacted_outcome_and_dedup_state(
     assert len(records) == 1
     assert records[0].levelname == "INFO"
     assert records[0].outcome == "SUCCESS"
+
+
+def _valid_retained_outcome() -> dict[str, object]:
+    return {
+        "destination_id": "retained",
+        "adapter_id": "generic_webhook",
+        "attempted_at_seconds": 100,
+        "attempts": 1,
+        "outcome": "SUCCESS",
+        "reason_code": None,
+        "status_code": 204,
+    }
+
+
+def _private_marker() -> str:
+    return "PRIVATE" + "_RETAINED_VALUE"
+
+
+def _malformed_retained_outcome(case: str) -> str:
+    valid = _valid_retained_outcome()
+    if case == "malformed-json":
+        return "{"
+    if case == "non-list":
+        return "{}"
+    if case == "extra-field":
+        return json.dumps([{**valid, "end" + "point": _private_marker()}])
+    if case == "wrong-type":
+        return json.dumps([{**valid, "attempts": "1"}])
+    if case == "malformed-object":
+        return json.dumps(["not-an-outcome"])
+    if case == "missing-field":
+        del valid["adapter_id"]
+        return json.dumps([valid])
+    if case == "unsupported-outcome":
+        return json.dumps([{**valid, "outcome": "UNKNOWN"}])
+    if case == "unsupported-reason":
+        return json.dumps([{**valid, "reason_code": "UNKNOWN"}])
+    if case == "unsupported-status":
+        return json.dumps([{**valid, "status_code": 500}])
+    if case == "invalid-attempts":
+        return json.dumps([{**valid, "attempts": 6}])
+    if case == "invalid-timestamp":
+        return json.dumps([{**valid, "attempted_at_seconds": -1}])
+    if case == "over-bound":
+        return json.dumps([valid] * 101)
+    raise AssertionError("unknown malformed outcome fixture")
+
+
+@pytest.mark.parametrize(
+    "case",
+    (
+        "malformed-json",
+        "non-list",
+        "extra-field",
+        "wrong-type",
+        "malformed-object",
+        "missing-field",
+        "unsupported-outcome",
+        "unsupported-reason",
+        "unsupported-status",
+        "invalid-attempts",
+        "invalid-timestamp",
+        "over-bound",
+    ),
+)
+def test_outcome_append_rejects_malformed_retained_state_without_changing_row(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    case: str,
+) -> None:
+    database = tmp_path / "runtime.sqlite3"
+    repository = _repository(database)
+    encoded = _malformed_retained_outcome(case)
+    with sqlite3.connect(database) as connection:
+        connection.execute("PRAGMA ignore_check_constraints=ON")
+        connection.execute(
+            "UPDATE runs SET notification_outcomes_json=? WHERE run_id='run'", (encoded,)
+        )
+        before = connection.execute(
+            "SELECT CAST(notification_outcomes_json AS BLOB) FROM runs WHERE run_id='run'"
+        ).fetchone()[0]
+
+    addition = NotificationDeliveryRecord(
+        "run", "new", "generic_webhook", 101, 1, "SUCCESS", None, 204
+    )
+    with (
+        caplog.at_level("INFO"),
+        pytest.raises(RuntimeError, match="^invalid notification outcome state$"),
+    ):
+        repository.store_notification_outcomes((addition,))
+
+    with sqlite3.connect(database) as connection:
+        after = connection.execute(
+            "SELECT CAST(notification_outcomes_json AS BLOB) FROM runs WHERE run_id='run'"
+        ).fetchone()[0]
+    assert sha256(after).digest() == sha256(before).digest()
+    assert _private_marker() not in caplog.text
+
+
+def test_malformed_retained_outcome_returns_bounded_receipt_without_disclosure(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    database = tmp_path / "runtime.sqlite3"
+    repository = _repository(database)
+    encoded = _malformed_retained_outcome("extra-field")
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "UPDATE runs SET notification_outcomes_json=? WHERE run_id='run'", (encoded,)
+        )
+        before = connection.execute(
+            "SELECT CAST(notification_outcomes_json AS BLOB) FROM runs WHERE run_id='run'"
+        ).fetchone()[0]
+    calls: list[tuple[str, tuple[str, ...]]] = []
+
+    with caplog.at_level("INFO", logger="smc_ict.application.notifications"):
+        receipt = _router(repository, {"only": _destination(maximum=1)}, calls, now=101).deliver(
+            _event("run_succeeded")
+        )
+
+    with sqlite3.connect(database) as connection:
+        after = connection.execute(
+            "SELECT CAST(notification_outcomes_json AS BLOB) FROM runs WHERE run_id='run'"
+        ).fetchone()[0]
+    assert receipt.outcome == "ALL_FAILURE"
+    assert receipt.receipts[0].reason_code == "DEDUPLICATION_STATE_UNAVAILABLE"
+    assert sha256(after).digest() == sha256(before).digest()
+    assert _private_marker() not in caplog.text
+    assert _private_marker() not in repr(receipt)
+
+
+def test_valid_outcome_append_retains_only_the_newest_hundred_records(tmp_path: Path) -> None:
+    repository = _repository(tmp_path / "runtime.sqlite3")
+    records = tuple(
+        NotificationDeliveryRecord(
+            "run", "only", "generic_webhook", attempted_at, 1, "SUCCESS", None, 204
+        )
+        for attempted_at in range(101)
+    )
+
+    repository.store_notification_outcomes(records)
+
+    retained = repository.load_notification_outcomes("run")
+    assert len(retained) == 100
+    assert [record.attempted_at_seconds for record in retained] == list(range(1, 101))
 
 
 def test_expired_durable_record_delivers_again_at_window_boundary(tmp_path: Path) -> None:
