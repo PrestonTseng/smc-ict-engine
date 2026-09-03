@@ -194,6 +194,89 @@ def test_configuration_models_are_strict_frozen_pydantic_models() -> None:
         )
 
 
+def test_schedule_job_and_strategy_config_accept_parent_positional_constructors() -> None:
+    from smc_ict.configuration.models import ScheduleJob, SignalConfig, StrategyConfig
+
+    job_values = (
+        "research",
+        "7 */1 * * *",
+        "/config/strategies/research.yaml",
+        "/config/market-data.yaml",
+        "/config/notifications.yaml",
+        "skip",
+        120,
+        "skip",
+        900,
+        5,
+    )
+    job = ScheduleJob(*job_values)
+    keyword_job = ScheduleJob(
+        id="research",
+        cron="7 */1 * * *",
+        strategy="/config/strategies/research.yaml",
+        market_data="/config/market-data.yaml",
+        notifications="/config/notifications.yaml",
+        misfire_policy="skip",
+        misfire_grace_seconds=120,
+        overlap_policy="skip",
+        maximum_runtime_seconds=900,
+        startup_delay_seconds=5,
+    )
+    signal = SignalConfig(
+        "smc.swing_structure",
+        "regime",
+        (),
+        {"swing_length": 50, "show_labels": True},
+        True,
+        "REJECT",
+        10,
+    )
+    strategy = StrategyConfig("research", "1", ("BTC-USDT-PERP",), 60, {"regime": "4h"}, (signal,))
+    keyword_strategy = StrategyConfig(
+        name="research",
+        version="1",
+        instruments=("BTC-USDT-PERP",),
+        history_minutes=60,
+        roles={"regime": "4h"},
+        signals=(signal,),
+    )
+
+    assert job.id == "research"
+    assert keyword_job == job
+    assert strategy.name == "research"
+    assert keyword_strategy == strategy
+
+
+def test_schedule_job_and_strategy_config_reject_wrong_positional_argument_counts() -> None:
+    from smc_ict.configuration.models import ScheduleJob, StrategyConfig
+
+    job_values = (
+        "research",
+        "7 */1 * * *",
+        "/config/strategies/research.yaml",
+        "/config/market-data.yaml",
+        "/config/notifications.yaml",
+        "skip",
+        120,
+        "skip",
+        900,
+        5,
+    )
+
+    with pytest.raises(TypeError):
+        ScheduleJob("research")  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        ScheduleJob(*(["research"] * 11))  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        StrategyConfig("research")  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        StrategyConfig(*(["research"] * 7))  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        ScheduleJob(*job_values, id="other")  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        StrategyConfig(*(["research"] * 6), name="other")  # type: ignore[call-arg]
+
+
 def test_loaded_configuration_is_deeply_immutable() -> None:
     a = api()
     market = a["load_market_data_text"](MARKET)

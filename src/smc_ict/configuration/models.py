@@ -215,6 +215,34 @@ class ScheduleJob(BaseModel):
     maximum_runtime_seconds: Annotated[int, Field(ge=1, le=86400)]
     startup_delay_seconds: Annotated[int, Field(ge=0, le=300)]
 
+    def __init__(
+        self,
+        id: str,
+        cron: str,
+        strategy: str,
+        market_data: str,
+        notifications: str,
+        misfire_policy: str,
+        misfire_grace_seconds: int,
+        overlap_policy: str,
+        maximum_runtime_seconds: int,
+        startup_delay_seconds: int,
+        **extra: object,
+    ) -> None:
+        super().__init__(
+            id=id,
+            cron=cron,
+            strategy=strategy,
+            market_data=market_data,
+            notifications=notifications,
+            misfire_policy=misfire_policy,
+            misfire_grace_seconds=misfire_grace_seconds,
+            overlap_policy=overlap_policy,
+            maximum_runtime_seconds=maximum_runtime_seconds,
+            startup_delay_seconds=startup_delay_seconds,
+            **extra,
+        )
+
     def canonical_dict(self) -> dict[str, object]:
         return self.model_dump(mode="python")
 
@@ -669,6 +697,26 @@ class StrategyConfig(BaseModel):
     history_minutes: Annotated[int, Field(ge=1, le=10_000_000)]
     roles: Mapping[Role, PlainString]
     signals: tuple[SignalConfig, ...]
+
+    def __init__(
+        self,
+        name: str,
+        version: str,
+        instruments: tuple[str, ...],
+        history_minutes: int,
+        roles: Mapping[str, str],
+        signals: tuple[SignalConfig, ...],
+        **extra: object,
+    ) -> None:
+        super().__init__(
+            name=name,
+            version=version,
+            instruments=instruments,
+            history_minutes=history_minutes,
+            roles=roles,
+            signals=signals,
+            **extra,
+        )
 
     @field_validator("instruments", "signals", mode="before")
     @classmethod
