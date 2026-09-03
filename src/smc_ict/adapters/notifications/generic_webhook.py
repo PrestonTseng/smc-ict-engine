@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import unicodedata
 from collections.abc import Callable, Mapping
 from hashlib import sha256
 from pathlib import Path
@@ -128,10 +129,23 @@ class GenericWebhookNotifier:
         value = (environ or __import__("os").environ).get(ref.name) if ref.kind == "env" else None
         if ref.kind == "file":
             try:
-                value = Path(ref.name).read_text(encoding="utf-8")
+                value = Path(ref.name).read_text(encoding="utf-8", newline="")
             except OSError:
                 value = None
-        if type(value) is not str or value != value.strip():
+            if type(value) is str:
+                if value.endswith("\r\n"):
+                    value = value[:-2]
+                elif value.endswith("\n"):
+                    value = value[:-1]
+        if (
+            type(value) is not str
+            or (ref.kind == "file" and not value)
+            or value != value.strip()
+            or (
+                ref.kind == "file"
+                and any(unicodedata.category(character) == "Cc" for character in value)
+            )
+        ):
             raise ValueError("notification endpoint is unavailable")
         parsed = urlsplit(value)
         if (
