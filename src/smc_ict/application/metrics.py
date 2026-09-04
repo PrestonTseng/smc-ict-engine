@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
-from decimal import Decimal, localcontext
+from decimal import Decimal
 from statistics import median
 
+from smc_ict.application.decimal_context import deterministic_decimal_context
 from smc_ict.application.execution_simulator import TradeRecord, _decimal_text
 from smc_ict.domain.backtesting import ReplayEvaluation
 
@@ -58,6 +59,11 @@ class MetricsReport:
 
 
 def summarize_trades(trades: tuple[TradeRecord, ...]) -> MetricsReport:
+    with deterministic_decimal_context():
+        return _summarize_trades(trades)
+
+
+def _summarize_trades(trades: tuple[TradeRecord, ...]) -> MetricsReport:
     ordered = tuple(
         sorted(
             trades,
@@ -115,15 +121,11 @@ def _summarize(trades: tuple[TradeRecord, ...]) -> TradeMetrics:
         Decimal(0),
     )
     count = len(closed)
-    with localcontext() as context:
-        context.prec = 28
-        win_rate = (
-            None
-            if count == 0
-            else _decimal_text(Decimal(sum(value > 0 for value in values)) / count)
-        )
-        mean = None if count == 0 else _decimal_text(sum(values, Decimal(0)) / count)
-        factor = None if losses == 0 else _decimal_text(profits / losses)
+    win_rate = (
+        None if count == 0 else _decimal_text(Decimal(sum(value > 0 for value in values)) / count)
+    )
+    mean = None if count == 0 else _decimal_text(sum(values, Decimal(0)) / count)
+    factor = None if losses == 0 else _decimal_text(profits / losses)
     median_value = None if count == 0 else _decimal_text(median(values))
     cumulative = sum(values, Decimal(0))
     return TradeMetrics(

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 
+from smc_ict.application.decimal_context import deterministic_decimal_context
 from smc_ict.configuration.models import (
     BacktestCostConfig,
     BacktestEntryConfig,
@@ -77,10 +78,19 @@ class ExecutionSimulator:
         self._execution = execution
         self._costs = costs
         self._execution_bar_minutes = execution_bar_minutes
-        self._fee_rate = Decimal(costs.taker_fee_bps) / Decimal("10000")
-        self._slippage_rate = Decimal(costs.adverse_slippage_bps) / Decimal("10000")
+        with deterministic_decimal_context():
+            self._fee_rate = Decimal(costs.taker_fee_bps) / Decimal("10000")
+            self._slippage_rate = Decimal(costs.adverse_slippage_bps) / Decimal("10000")
 
     def run(
+        self,
+        evaluations: tuple[ReplayEvaluation, ...],
+        candles: tuple[ClosedCandle, ...],
+    ) -> SimulationResult:
+        with deterministic_decimal_context():
+            return self._run(evaluations, candles)
+
+    def _run(
         self,
         evaluations: tuple[ReplayEvaluation, ...],
         candles: tuple[ClosedCandle, ...],

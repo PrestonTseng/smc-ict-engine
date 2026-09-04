@@ -2,16 +2,21 @@ from __future__ import annotations
 
 import hashlib
 import json
+from decimal import ROUND_DOWN, ROUND_UP, localcontext
 from pathlib import Path
 
 import pytest
 
 from smc_ict.application.backtesting import BacktestIdentity, RequiredRange
-from smc_ict.application.execution_simulator import SimulationResult, TradeRecord
+from smc_ict.application.execution_simulator import (
+    ExecutionSimulator,
+    SimulationResult,
+    TradeRecord,
+)
 from smc_ict.application.metrics import summarize_backtest
 from smc_ict.configuration import load_backtest_text, load_market_data_text, load_strategy
 from smc_ict.configuration.models import BacktestPeriod
-from smc_ict.domain import Decision
+from smc_ict.domain import ClosedCandle, Decision
 from smc_ict.domain.backtesting import PipelineStep, PipelineTrace, ReplayEvaluation, ReplayResult
 
 SCENARIO = """\
@@ -123,6 +128,81 @@ def _publish(root: Path):
     return identity, receipt
 
 
+def _ambient_context_report(root: Path, *, precision: int, rounding: str) -> dict[str, object]:
+    identity, base_replay, _, _ = _evidence()
+    scenario = load_backtest_text(SCENARIO)
+    decision = Decision(
+        "BTC-USDT-PERP",
+        "READY",
+        "LONG",
+        "123456789.123456789",
+        "123000000",
+        "124000000",
+        None,
+        {},
+    )
+    evaluation = ReplayEvaluation(
+        "BTC-USDT-PERP",
+        base_replay.evaluations[0].evaluation_time_ms,
+        decision,
+        base_replay.evaluations[0].decision_hash,
+        base_replay.evaluations[0].trace,
+    )
+    candles = tuple(
+        ClosedCandle(
+            provider_id="okx_swap",
+            market_type="LINEAR_PERPETUAL",
+            instrument_id="BTC-USDT-PERP",
+            provider_symbol="BTC-USDT-SWAP",
+            interval="1m",
+            open_time_ms=open_time_ms,
+            close_time_ms=open_time_ms + 59_999,
+            open=opening,
+            high=high,
+            low=low,
+            close=close,
+            base_volume="1",
+            quote_volume="1",
+            source_fields={"contract_volume": "1"},
+        )
+        for open_time_ms, opening, high, low, close in (
+            (1_767_225_600_000, "123456789", "123456789", "123456789", "123456789"),
+            (1_767_225_660_000, "123456789", "123500000", "123400000", "123450000"),
+            (1_767_225_720_000, "124000000", "124000000", "123900000", "124000000"),
+        )
+    )
+    replay = ReplayResult((evaluation,), base_replay.candle_count, base_replay.data_hash)
+    with localcontext() as ambient:
+        ambient.prec = precision
+        ambient.rounding = rounding
+        simulation = ExecutionSimulator(
+            entry=scenario.entry,
+            execution=scenario.execution,
+            costs=scenario.costs,
+            execution_bar_minutes=1,
+        ).run(replay.evaluations, candles)
+        metrics = summarize_backtest(replay.evaluations, simulation.trades)
+        from smc_ict.adapters.reporting.jsonl import BacktestReportPublisher
+
+        receipt = BacktestReportPublisher(root).publish(
+            identity=identity,
+            scenario=scenario,
+            strategy=load_strategy(
+                Path(__file__).parents[1] / "strategies/source-aligned-research.yaml"
+            ),
+            market_data=load_market_data_text(MARKET),
+            replay=replay,
+            simulation=simulation,
+            metrics=metrics,
+        )
+    return {
+        "backtest_id": receipt.backtest_id,
+        "trades": simulation.trades,
+        "summary": metrics.canonical_dict(),
+        "artifacts": {path.name: path.read_bytes() for path in receipt.path.iterdir()},
+    }
+
+
 def test_report_publication_emits_consistent_canonical_artifacts(tmp_path: Path) -> None:
     identity, replay, simulation, metrics = _evidence()
     _, receipt = _publish(tmp_path)
@@ -161,6 +241,21 @@ def test_report_publication_emits_consistent_canonical_artifacts(tmp_path: Path)
             "bytes": len(payload),
             "sha256": hashlib.sha256(payload).hexdigest(),
         }
+
+
+def test_trade_summary_id_and_artifacts_ignore_hostile_ambient_decimal_context(
+    tmp_path: Path,
+) -> None:
+    low_precision = _ambient_context_report(tmp_path / "low", precision=6, rounding=ROUND_DOWN)
+    high_precision = _ambient_context_report(tmp_path / "high", precision=28, rounding=ROUND_UP)
+
+    trades = high_precision["trades"]
+    assert isinstance(trades, tuple)
+    assert trades[0].executed_entry == "123481480.4812814803578"
+    assert low_precision["trades"] == high_precision["trades"]
+    assert low_precision["summary"] == high_precision["summary"]
+    assert low_precision["backtest_id"] == high_precision["backtest_id"]
+    assert low_precision["artifacts"] == high_precision["artifacts"]
 
 
 def test_byte_identical_rerun_reuses_result_and_tampering_fails_closed(tmp_path: Path) -> None:
