@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from decimal import ROUND_DOWN, ROUND_UP, localcontext
 from pathlib import Path
 
@@ -302,6 +303,65 @@ def test_existing_result_symlink_is_never_trusted(tmp_path: Path) -> None:
 
     with pytest.raises(FileExistsError, match="differs"):
         _publish(destination)
+
+
+def test_existing_result_with_six_external_artifact_symlinks_is_rejected(
+    tmp_path: Path,
+) -> None:
+    external = tmp_path / "external"
+    destination = tmp_path / "destination"
+    _, external_receipt = _publish(external)
+    result = destination / external_receipt.backtest_id
+    result.mkdir(parents=True)
+    for artifact in external_receipt.path.iterdir():
+        (result / artifact.name).symlink_to(artifact)
+
+    with pytest.raises(FileExistsError, match="differs"):
+        _publish(destination)
+
+    replacement = b'{"externally_mutated":true}\n'
+    (external_receipt.path / "summary.json").write_bytes(replacement)
+    assert (result / "summary.json").read_bytes() == replacement
+    assert len(tuple(path for path in result.iterdir() if path.is_symlink())) == 6
+
+
+@pytest.mark.parametrize("entry_kind", ("regular", "directory", "dangling_symlink", "fifo"))
+def test_existing_result_rejects_unexpected_entries_of_every_file_type(
+    tmp_path: Path,
+    entry_kind: str,
+) -> None:
+    _, receipt = _publish(tmp_path)
+    unexpected = receipt.path / "unexpected"
+    if entry_kind == "regular":
+        unexpected.write_bytes(b"unexpected")
+    elif entry_kind == "directory":
+        unexpected.mkdir()
+    elif entry_kind == "dangling_symlink":
+        unexpected.symlink_to(tmp_path / "outside" / "missing")
+    else:
+        os.mkfifo(unexpected)
+
+    with pytest.raises(FileExistsError, match="differs"):
+        _publish(tmp_path)
+
+
+@pytest.mark.parametrize("entry_kind", ("directory", "dangling_symlink", "fifo"))
+def test_existing_result_rejects_nonregular_expected_artifacts(
+    tmp_path: Path,
+    entry_kind: str,
+) -> None:
+    _, receipt = _publish(tmp_path)
+    artifact = receipt.path / "summary.json"
+    artifact.unlink()
+    if entry_kind == "directory":
+        artifact.mkdir()
+    elif entry_kind == "dangling_symlink":
+        artifact.symlink_to(tmp_path / "outside" / "missing")
+    else:
+        os.mkfifo(artifact)
+
+    with pytest.raises(FileExistsError, match="differs"):
+        _publish(tmp_path)
 
 
 def test_html_is_offline_and_exposes_complete_trace_filters(tmp_path: Path) -> None:
