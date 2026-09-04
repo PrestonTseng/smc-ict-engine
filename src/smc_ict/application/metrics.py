@@ -26,6 +26,14 @@ class TradeMetrics:
     status_counts: tuple[tuple[str, int], ...]
     exit_reason_counts: tuple[tuple[str, int], ...]
 
+    def canonical_dict(self) -> dict[str, object]:
+        return {
+            field: [list(item) for item in value]
+            if field in {"status_counts", "exit_reason_counts"}
+            else value
+            for field, value in ((name, getattr(self, name)) for name in self.__dataclass_fields__)
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class MetricsReport:
@@ -34,6 +42,19 @@ class MetricsReport:
     by_direction: tuple[tuple[str, TradeMetrics], ...]
     decision_status_counts: tuple[tuple[str, int], ...] = ()
     unavailable_reason_counts: tuple[tuple[str, int], ...] = ()
+
+    def canonical_dict(self) -> dict[str, object]:
+        return {
+            "overall": self.overall.canonical_dict(),
+            "by_instrument": [
+                [name, metrics.canonical_dict()] for name, metrics in self.by_instrument
+            ],
+            "by_direction": [
+                [name, metrics.canonical_dict()] for name, metrics in self.by_direction
+            ],
+            "decision_status_counts": [list(item) for item in self.decision_status_counts],
+            "unavailable_reason_counts": [list(item) for item in self.unavailable_reason_counts],
+        }
 
 
 def summarize_trades(trades: tuple[TradeRecord, ...]) -> MetricsReport:

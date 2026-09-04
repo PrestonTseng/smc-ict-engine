@@ -228,9 +228,7 @@ class PointInTimeReplay:
             key=lambda item: (item.order, item.signal_id),
         ):
             output_hash = observation_hashes.get(signal.signal_id)
-            dependency_hashes = (
-                () if output_hash is None else ((signal.signal_id, output_hash),)
-            )
+            dependency_hashes = () if output_hash is None else ((signal.signal_id, output_hash),)
             if rejected:
                 state, reason, output_hash = (
                     "SKIPPED_AFTER_REJECTION",

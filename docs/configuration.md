@@ -20,3 +20,7 @@ events and uses the native `discord_webhook` adapter.
 Copy `.env.example` to a local ignored `.env` only when your Compose workflow loads that file. It
 contains the immutable image revision and required absolute `DATA_FOLDER` configuration. Do not
 commit resolved values.
+
+Backtest scenarios live under `backtests/<strategy-id>/` rather than global `config/`. Each scenario must name one existing strategy leaf under `strategies/` and define canonical UTC minute boundaries, touch-limit expiry, stop-first execution, holding time, quoted canonical fee/slippage values, and `output.existing_result: fail`.
+
+A scenario cannot select a provider, market-data file, instrument subset, database, lock, report root, capital, leverage, balance, risk percentage, or quantity. `CONFIG_FOLDER/market-data.yaml` remains the single provider and mapping authority. `DATA_FOLDER` remains the single storage authority; reports derive as `DATA_FOLDER/backtests/<backtest-id>/`.

@@ -631,7 +631,7 @@ def test_scheduler_applies_utc_misfire_overlap_coalescing_recovery_and_shutdown(
             ScheduleJob(
                 id="fixture-job",
                 cron="*/5 * * * *",
-                strategy="/config/strategy.yaml",
+                strategy="/strategies/strategy.yaml",
                 notifications="/config/notifications.yaml",
                 misfire_policy="skip",
                 misfire_grace_seconds=17,
@@ -685,7 +685,7 @@ def test_scheduler_honors_configured_startup_delay_for_first_fire() -> None:
             ScheduleJob(
                 id="delayed-job",
                 cron="* * * * *",
-                strategy="/config/strategy.yaml",
+                strategy="/strategies/strategy.yaml",
                 notifications="/config/notifications.yaml",
                 misfire_policy="skip",
                 misfire_grace_seconds=10,
@@ -731,7 +731,7 @@ def test_scheduler_build_validates_every_referenced_job_authority_before_readine
   jobs:
     - id: broken
       cron: "* * * * *"
-      strategy: /config/missing-strategy.yaml
+      strategy: /strategies/missing-strategy.yaml
       notifications: /config/missing-notifications.yaml
       misfire_policy: skip
       misfire_grace_seconds: 10
@@ -769,7 +769,7 @@ def test_scheduler_build_loads_only_the_global_market_data_authority(tmp_path, m
   jobs:
     - id: global-market
       cron: "* * * * *"
-      strategy: /config/strategy.yaml
+      strategy: /strategies/strategy.yaml
       notifications: /config/notifications.yaml
       misfire_policy: skip
       misfire_grace_seconds: 10
@@ -833,7 +833,7 @@ def test_scheduler_shutdown_stops_and_drains_an_active_owned_operation() -> None
             ScheduleJob(
                 id="owned-child",
                 cron="* * * * *",
-                strategy="/config/strategy.yaml",
+                strategy="/strategies/strategy.yaml",
                 notifications="/config/notifications.yaml",
                 misfire_policy="skip",
                 misfire_grace_seconds=10,
@@ -924,7 +924,7 @@ def test_timed_out_child_is_terminated_killed_drained_and_durably_reconciled(
     job = ScheduleJob(
         id="timeout",
         cron="* * * * *",
-        strategy="/config/strategy.yaml",
+        strategy="/strategies/strategy.yaml",
         notifications="/config/notifications.yaml",
         misfire_policy="skip",
         misfire_grace_seconds=10,
@@ -946,7 +946,7 @@ def test_timed_out_child_is_terminated_killed_drained_and_durably_reconciled(
         "smc_ict.cli",
         "run",
         "--strategy",
-        str(tmp_path / "strategy.yaml"),
+        "/strategies/strategy.yaml",
         "--notifications",
         str(tmp_path / "notifications.yaml"),
         "--trigger",

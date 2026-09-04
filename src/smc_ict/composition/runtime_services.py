@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -14,8 +15,20 @@ from threading import Lock
 from time import time_ns
 from typing import Protocol
 
-from smc_ict.adapters.persistence.sqlite import SQLiteRepository
+from smc_ict.adapters.persistence.sqlite import (
+    SQLiteRepository,
+    SQLiteSnapshotReader,
+    create_sqlite_snapshot,
+)
+from smc_ict.adapters.reporting.jsonl import BacktestReportPublisher, ReportPublication
+from smc_ict.application.backtesting import (
+    BacktestIdentity,
+    PointInTimeReplay,
+    RequiredRangeResolver,
+)
+from smc_ict.application.execution_simulator import ExecutionSimulator
 from smc_ict.application.historical_sync import HistoricalRangeSyncService, HistoricalSyncReceipt
+from smc_ict.application.metrics import summarize_backtest
 from smc_ict.application.notifications import NotificationRouter
 from smc_ict.application.ports import InstrumentMapping, Notifier
 from smc_ict.application.receipt_contract import (
@@ -41,10 +54,15 @@ from smc_ict.composition.registries import (
 )
 from smc_ict.configuration import (
     DEFERRED_PLUGIN_IDS,
+    hash_backtest,
+    hash_market_data,
+    hash_strategy,
+    load_backtest,
     load_market_data,
     load_notifications,
     load_schedule,
     load_strategy,
+    resolve_backtest_strategy_path,
 )
 from smc_ict.configuration.models import NotificationDestination, ScheduleJob
 
@@ -119,6 +137,90 @@ def sync_historical_range(*, start: str, end: str) -> HistoricalSyncReceipt:
             start_ms,
             end_ms,
         )
+
+
+def run_backtest(scenario_path: str | Path) -> ReportPublication:
+    """Synchronize once, snapshot under the writer lock, then remain offline."""
+
+    paths = RuntimePaths.from_environ()
+    scenario = load_backtest(scenario_path)
+    strategy = load_strategy(resolve_backtest_strategy_path(scenario_path, scenario))
+    market = load_market_data(required_runtime_folder("CONFIG_FOLDER") / "market-data.yaml")
+    if set(strategy.instruments) - market.instruments.keys():
+        raise ValueError("strategy instruments are missing from market-data configuration")
+    required = RequiredRangeResolver.resolve(
+        scenario.period, history_minutes=strategy.history_minutes
+    )
+    provider = build_market_provider(market, market_data_composition_root())
+    mappings = tuple(
+        InstrumentMapping(instrument_id, market.instruments[instrument_id])
+        for instrument_id in strategy.instruments
+    )
+    paths.backtests.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".backtest-", dir=paths.backtests) as temporary:
+        snapshot_path = Path(temporary) / "snapshot.sqlite3"
+        repository = SQLiteRepository(paths.database)
+        with ProcessLock(paths.lock) as lock:
+            if not lock.acquired:
+                raise RuntimeError("backtest cannot overlap the active writer")
+            HistoricalRangeSyncService(provider, repository).sync_all(
+                mappings, required.start_open_ms, required.end_open_ms
+            )
+            create_sqlite_snapshot(paths.database, snapshot_path)
+
+        reader = SQLiteSnapshotReader(snapshot_path)
+        root = indicator_composition_root()
+        factories = {signal.id: root.plugins.resolve(signal.id) for signal in strategy.signals}
+        replay = PointInTimeReplay(
+            strategy=strategy,
+            provider_id=market.provider,
+            market_type=market.market_type,
+            candle_source=reader,
+            plugin_factories=factories,  # type: ignore[arg-type]
+        ).run(scenario.period)
+        candles = tuple(
+            candle
+            for instrument_id in strategy.instruments
+            for candle in reader.load_candles(
+                market.provider,
+                market.market_type,
+                instrument_id,
+                required.start_open_ms,
+                required.end_open_ms,
+            )
+        )
+        simulation = ExecutionSimulator(
+            entry=scenario.entry,
+            execution=scenario.execution,
+            costs=scenario.costs,
+            execution_bar_minutes=_timeframe_minutes(strategy.roles["execution"]),
+        ).run(replay.evaluations, candles)
+        metrics = summarize_backtest(replay.evaluations, simulation.trades)
+        identity = BacktestIdentity.create(
+            scenario_hash=hash_backtest(scenario),
+            strategy_hash=hash_strategy(strategy),
+            market_data_hash=hash_market_data(market),
+            candle_data_hash=replay.data_hash,
+            git_commit=current_git_commit(),
+            period=scenario.period,
+            required_range=required,
+        )
+        return BacktestReportPublisher(paths.backtests).publish(
+            identity=identity,
+            scenario=scenario,
+            strategy=strategy,
+            market_data=market,
+            replay=replay,
+            simulation=simulation,
+            metrics=metrics,
+        )
+
+
+def _timeframe_minutes(timeframe: str) -> int:
+    try:
+        return {"1m": 1, "5m": 5, "1h": 60, "4h": 240}[timeframe]
+    except KeyError as exc:
+        raise ValueError("unsupported execution timeframe") from exc
 
 
 def current_time_ms() -> int:
@@ -424,7 +526,7 @@ def _subprocess_operation(
         "smc_ict.cli",
         "run",
         "--strategy",
-        str(_host_config_path(job.strategy, config_root)),
+        job.strategy,
         "--notifications",
         str(_host_config_path(job.notifications, config_root)),
         "--trigger",
@@ -450,7 +552,7 @@ def build_scheduler(
     schedule = load_schedule(schedule_path)
     market = load_market_data(Path(config_root) / "market-data.yaml") if schedule.enabled else None
     for job in schedule.jobs if schedule.enabled else ():
-        strategy = load_strategy(_host_config_path(job.strategy, config_root))
+        strategy = load_strategy(job.strategy)
         load_notifications(_host_config_path(job.notifications, config_root))
         assert market is not None
         if set(strategy.instruments) - market.instruments.keys():

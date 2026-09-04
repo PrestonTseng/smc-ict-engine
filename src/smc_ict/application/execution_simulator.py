@@ -145,9 +145,8 @@ class ExecutionSimulator:
                     fill = self._stop_fill(opened, candle, stop)
                     trades.append(self._closed_record(opened, candle, stop, fill, "STOP"))
                     opened = None
-                elif (
-                    candle.open_time_ms > opened.entry_time_ms
-                    and self._target_touched(opened, candle, target)
+                elif candle.open_time_ms > opened.entry_time_ms and self._target_touched(
+                    opened, candle, target
                 ):
                     trades.append(self._closed_record(opened, candle, target, target, "TARGET"))
                     opened = None

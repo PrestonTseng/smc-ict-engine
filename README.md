@@ -106,9 +106,10 @@ uv run smc-ict notifier-test \
 Run a manual receipt path:
 
 ```sh
+export DATA_FOLDER="$(pwd)/data"
+export CONFIG_FOLDER="$(pwd)/config"
 uv run smc-ict run \
   --strategy strategies/source-aligned-research.yaml \
-  --market-data config/market-data.yaml \
   --notifications config/notifications.yaml \
   --database "$DATA_FOLDER/smc_ict.db" \
   --lock "$DATA_FOLDER/engine.lock" \
@@ -116,6 +117,36 @@ uv run smc-ict run \
 ```
 
 The checked-in source-aligned strategy executes seven Python plugins over completed candles. Warm-up gaps produce `UNAVAILABLE`; fully evaluable gates that are not satisfied produce `NO_TRADE`. A `READY` result remains research evidence, not an order instruction.
+
+## Deterministic backtesting
+
+Backtests use the same global `config/market-data.yaml`, canonical candle store, strategy DAG, and ordered decision policy as normal research runs. A scenario selects one exact strategy and owns only its UTC period, conservative execution assumptions, costs, and immutable-output policy.
+
+```sh
+export DATA_FOLDER="$(pwd)/data"
+export CONFIG_FOLDER="$(pwd)/config"
+export SMC_ICT_GIT_COMMIT="$(git rev-parse HEAD)"
+uv run smc-ict backtest backtests/source-aligned-research/one-year-baseline.yaml
+```
+
+The command synchronizes the requested period plus strategy warm-up under the shared writer lock, creates a short-lived SQLite online snapshot, releases the lock, and performs replay, simulation, and reporting offline. It publishes `${DATA_FOLDER}/backtests/<backtest-id>/` only after all six artifacts are complete:
+
+- `manifest.json` binds immutable input identities and the byte size and SHA-256 of every payload artifact.
+- `decisions.jsonl` and `pipeline-traces.jsonl` preserve every ordered evaluation, pass/reject/unavailable reason, and first rejection.
+- `trades.jsonl` contains normalized, one-unit simulated outcomes without account sizing.
+- `summary.json` contains overall, instrument, direction, disposition, and unavailable-reason metrics.
+- `report.html` embeds the canonical summary and traces for local filtering and expansion with no CDN or network dependency.
+
+An identical rerun verifies and reuses byte-identical output. If any existing artifact differs, the command fails without overwriting it. A failure before publication leaves no partial result directory and never writes backtest rows to the five production tables.
+
+For Compose, stop the scheduled writer during a long historical fill and use the manual profile, which does not mount or resolve notification secrets:
+
+```sh
+docker compose stop engine
+docker compose --profile manual run --rm manual \
+  backtest /backtests/source-aligned-research/one-year-baseline.yaml
+docker compose start engine
+```
 
 Start the scheduler outside Compose only for local diagnosis:
 

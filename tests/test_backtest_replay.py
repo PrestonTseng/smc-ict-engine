@@ -73,9 +73,7 @@ class RecordingPlugin:
         self._status = status
         self._signal_id = signal_id
 
-    def evaluate(
-        self, context: RunContext, dependencies: Mapping[str, Observation]
-    ) -> Observation:
+    def evaluate(self, context: RunContext, dependencies: Mapping[str, Observation]) -> Observation:
         del dependencies
         bars = context.candles_by_role["execution"]
         self._seen.append((context.evaluation_time_ms, tuple(bar.close_time_ms for bar in bars)))
@@ -227,17 +225,13 @@ def test_backtest_identity_hashes_every_immutable_input() -> None:
 def test_trace_uses_the_ordered_policy_unavailable_result_for_missing_levels() -> None:
     from smc_ict.application.backtesting import PointInTimeReplay
 
-    signals = (
-        SignalConfig("a", "execution", (), frozen_mapping({}), True, "LEVELS", 1),
-    )
+    signals = (SignalConfig("a", "execution", (), frozen_mapping({}), True, "LEVELS", 1),)
     replay = PointInTimeReplay(
         strategy=strategy(signals),
         provider_id="okx_swap",
         market_type="LINEAR_PERPETUAL",
         candle_source=CandleSource(tuple(candle(minute) for minute in range(10))),
-        plugin_factories={
-            "a": lambda parameters: RecordingPlugin(parameters, [], signal_id="a")
-        },
+        plugin_factories={"a": lambda parameters: RecordingPlugin(parameters, [], signal_id="a")},
     )
 
     evaluation = replay.run(BacktestPeriod(5 * 60_000, 9 * 60_000)).evaluations[0]
@@ -250,13 +244,17 @@ def test_trace_uses_the_ordered_policy_unavailable_result_for_missing_levels() -
 def test_replay_evaluation_has_a_canonical_ordered_record() -> None:
     from smc_ict.application.backtesting import PointInTimeReplay
 
-    evaluation = PointInTimeReplay(
-        strategy=strategy(),
-        provider_id="okx_swap",
-        market_type="LINEAR_PERPETUAL",
-        candle_source=CandleSource(tuple(candle(minute) for minute in range(10))),
-        plugin_factories={"levels": lambda parameters: RecordingPlugin(parameters, [])},
-    ).run(BacktestPeriod(5 * 60_000, 9 * 60_000)).evaluations[0]
+    evaluation = (
+        PointInTimeReplay(
+            strategy=strategy(),
+            provider_id="okx_swap",
+            market_type="LINEAR_PERPETUAL",
+            candle_source=CandleSource(tuple(candle(minute) for minute in range(10))),
+            plugin_factories={"levels": lambda parameters: RecordingPlugin(parameters, [])},
+        )
+        .run(BacktestPeriod(5 * 60_000, 9 * 60_000))
+        .evaluations[0]
+    )
 
     record = evaluation.canonical_dict()
 

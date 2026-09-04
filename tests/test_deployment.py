@@ -190,6 +190,13 @@ def test_compose_contract_keeps_the_database_in_the_required_bind_mount() -> Non
             "read_only": True,
             "bind": {"create_host_path": False},
         },
+        {
+            "type": "bind",
+            "source": "./backtests",
+            "target": "/backtests",
+            "read_only": True,
+            "bind": {"create_host_path": False},
+        },
     ]
     assert service["healthcheck"]["test"] == [
         "CMD",
@@ -224,6 +231,13 @@ def test_compose_avoids_the_legacy_nested_read_only_bind_mount_and_starts_a_fres
             "type": "bind",
             "source": "./strategies",
             "target": "/strategies",
+            "read_only": True,
+            "bind": {"create_host_path": False},
+        },
+        {
+            "type": "bind",
+            "source": "./backtests",
+            "target": "/backtests",
             "read_only": True,
             "bind": {"create_host_path": False},
         },
@@ -558,7 +572,7 @@ def test_compose_operator_contract_uses_direct_commands_and_native_guards() -> N
     assert "docker compose up -d engine" in operator_docs
     assert "docker compose ps" in operator_docs
     assert "${DATA_FOLDER:?Set DATA_FOLDER to the writable host data directory}" in compose_text
-    assert compose_text.count("create_host_path: false") == 3
+    assert compose_text.count("create_host_path: false") == 4
 
 
 def test_compose_and_image_apply_non_root_immutable_runtime_hardening() -> None:
@@ -577,6 +591,8 @@ def test_compose_and_image_apply_non_root_immutable_runtime_hardening() -> None:
     manual = compose["services"]["manual"]
     assert manual["profiles"] == ["manual"]
     assert manual["user"] == "10001:10001"
+    assert manual["environment"] == {"CONFIG_FOLDER": "/config", "DATA_FOLDER": "/data"}
+    assert "secrets" not in manual
 
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
     assert (
@@ -790,6 +806,23 @@ def test_required_operator_document_set_is_present_and_cross_linked() -> None:
 
     env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
     assert env_example == "SMC_ICT_GIT_COMMIT=\nDATA_FOLDER=/absolute/path/to/smc-ict-data\n"
+
+
+def test_operator_docs_cover_immutable_backtest_workflow_and_failures() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    for phrase in ("smc-ict backtest", "manifest.json", "pipeline-traces.jsonl", "report.html"):
+        assert phrase in readme
+
+    expectations = {
+        "architecture.md": ("SQLite snapshot", "atomic rename", "production tables"),
+        "configuration.md": ("backtests/<strategy-id>/", "existing_result", "market-data.yaml"),
+        "operations.md": ("--profile manual run --rm manual", "backtest /backtests/"),
+        "troubleshooting.md": ("existing backtest result differs", "snapshot candle range"),
+    }
+    for filename, phrases in expectations.items():
+        document = ROOT.joinpath("docs", filename).read_text(encoding="utf-8")
+        for phrase in phrases:
+            assert phrase in document
 
 
 def test_schema_uses_json_validation_supported_by_the_container_sqlite() -> None:

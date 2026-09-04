@@ -112,3 +112,27 @@ docker compose down
 ```
 
 The scheduler stops new fires. It terminates, kills, drains, and reconciles an active child within the bounded shutdown path.
+
+## Run an immutable backtest
+
+For host execution, set normalized absolute runtime roots and bind the result to the exact commit:
+
+```sh
+export DATA_FOLDER="$(pwd)/data"
+export CONFIG_FOLDER="$(pwd)/config"
+export SMC_ICT_GIT_COMMIT="$(git rev-parse HEAD)"
+uv run smc-ict backtest backtests/source-aligned-research/one-year-baseline.yaml
+```
+
+For Compose, avoid overlapping a long historical fill with the scheduler. The manual service has no Discord environment or secret mount:
+
+```sh
+docker compose stop engine
+docker compose --profile manual run --rm manual \
+  market-data sync-range --start 2025-06-03T00:00:00Z --end 2026-08-31T23:59:00Z
+docker compose --profile manual run --rm manual \
+  backtest /backtests/source-aligned-research/one-year-baseline.yaml
+docker compose start engine
+```
+
+Open `data/backtests/<backtest-id>/report.html` locally. Treat JSON and JSONL as the canonical audit evidence. Do not edit an existing result; change the scenario name/version or assumptions to produce a new identity.

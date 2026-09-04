@@ -18,6 +18,7 @@ from smc_ict.composition.runtime_services import (
     RuntimePaths,
     build_scheduler,
     required_runtime_folder,
+    run_backtest,
     run_once,
     sync_historical_range,
 )
@@ -119,6 +120,9 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--notifications")
     run.add_argument("--trigger", choices=("manual", "scheduled"), default="manual")
 
+    backtest = commands.add_parser("backtest")
+    backtest.add_argument("scenario")
+
     scheduler = commands.add_parser("scheduler")
     scheduler.add_argument("--schedule", required=True)
     return parser
@@ -202,6 +206,8 @@ def _execute(args: argparse.Namespace) -> dict[str, object]:
             lock_path=paths.lock,
             trigger=args.trigger,
         ).canonical_dict()
+    if args.command == "backtest":
+        return run_backtest(args.scenario).canonical_dict()
     if args.command == "scheduler":
         paths = RuntimePaths.from_environ()
         service = build_scheduler(

@@ -29,6 +29,12 @@ x-runtime: &runtime
       read_only: true
       bind:
         create_host_path: false
+    - type: bind
+      source: ./backtests
+      target: /backtests
+      read_only: true
+      bind:
+        create_host_path: false
   secrets:
     - discord_webhook_url
 
@@ -50,7 +56,7 @@ services:
     restart: unless-stopped
     stop_grace_period: 30s
     healthcheck:
-      test: ["CMD", "smc-ict", "scheduler-health"]
+      test: ["CMD", "smc-ict", "scheduler-health", "--health-file", "/data/scheduler.ready"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -59,6 +65,9 @@ services:
   manual:
     <<: *runtime
     profiles: [manual]
+    environment:
+      CONFIG_FOLDER: /config
+      DATA_FOLDER: /data
     command: ["--help"]
 
 secrets:

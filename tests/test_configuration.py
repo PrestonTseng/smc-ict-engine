@@ -24,6 +24,7 @@ schedule:
     - id: source-aligned-research
       cron: "7 */1 * * *"
       strategy: /config/strategies/source-aligned-research.yaml
+      market_data: /config/market-data.yaml
       notifications: /config/notifications.yaml
       misfire_policy: skip
       misfire_grace_seconds: 120
@@ -390,15 +391,6 @@ def test_schedule_accepts_only_utc_strict_bounds_paths_and_cron() -> None:
     for old, new in replacements:
         with pytest.raises(a["StrictConfigurationError"]):
             a["load_schedule_text"](SCHEDULE.replace(old, new))
-
-    with pytest.raises(a["StrictConfigurationError"], match="unknown"):
-        a["load_schedule_text"](
-            SCHEDULE.replace(
-                "      notifications:",
-                "      market_data: /config/alternate-market-data.yaml\n      notifications:",
-            )
-        )
-
 
 @pytest.mark.parametrize(
     "strategy_path",

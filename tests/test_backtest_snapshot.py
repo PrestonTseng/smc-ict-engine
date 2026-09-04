@@ -51,9 +51,7 @@ def test_online_backup_freezes_an_offline_read_only_range_without_mutating_sourc
     receipt = create_sqlite_snapshot(source_path, snapshot_path)
     repository.store_candle_page((candle(3),), successful_sync_ms=240_000, required_start_open_ms=0)
     reader = SQLiteSnapshotReader(snapshot_path)
-    frozen = reader.load_candles(
-        "okx_swap", "LINEAR_PERPETUAL", "BTC-USDT-PERP", 0, 180_000
-    )
+    frozen = reader.load_candles("okx_swap", "LINEAR_PERPETUAL", "BTC-USDT-PERP", 0, 180_000)
 
     assert frozen == initial
     assert receipt.data_hash == hash_candles(initial)
@@ -68,9 +66,9 @@ def test_online_backup_freezes_an_offline_read_only_range_without_mutating_sourc
         with sqlite3.connect(f"file:{snapshot_path}?mode=ro", uri=True) as connection:
             connection.execute("DELETE FROM candles_1m")
     source_path.unlink()
-    assert reader.load_candles(
-        "okx_swap", "LINEAR_PERPETUAL", "BTC-USDT-PERP", 0, 180_000
-    ) == initial
+    assert (
+        reader.load_candles("okx_swap", "LINEAR_PERPETUAL", "BTC-USDT-PERP", 0, 180_000) == initial
+    )
 
 
 def test_snapshot_fails_closed_on_existing_destination(tmp_path: Path) -> None:
