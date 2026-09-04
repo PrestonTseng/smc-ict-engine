@@ -9,7 +9,10 @@ from hashlib import sha256
 from pathlib import Path
 from typing import cast
 
-from smc_ict.application.ports.notifications import NotificationDedupRecord
+from smc_ict.application.ports.notifications import (
+    NotificationDedupRecord,
+    NotificationDeliveryRecord,
+)
 from smc_ict.application.ports.repository import (
     DecisionRecord,
     ObservationRecord,
@@ -94,6 +97,8 @@ CREATE TABLE runs (
     data_end_close_ms INTEGER NOT NULL,
     data_hash TEXT NOT NULL,
     notification_dedup_json TEXT NOT NULL DEFAULT '[]',
+    notification_outcomes_json TEXT NOT NULL DEFAULT '[]',
+    scheduler_outcome TEXT,
     error TEXT,
     CHECK (status IN ('RUNNING','SUCCEEDED','FAILED')),
     CHECK (started_at_ms >= 0),
@@ -107,6 +112,10 @@ CREATE TABLE runs (
     CHECK (data_end_close_ms >= data_start_open_ms + 59999 AND data_end_close_ms % 60000 = 59999),
     CHECK (length(data_hash)=64 AND data_hash NOT GLOB '*[^0-9a-f]*'),
     CHECK (json_valid(notification_dedup_json)),
+    CHECK (json_valid(notification_outcomes_json)),
+    CHECK (scheduler_outcome IS NULL OR scheduler_outcome IN
+        ('SUCCEEDED','SUCCEEDED_WITH_WARNINGS','FAILED','OVERLAP_SKIPPED',
+         'MAXIMUM_RUNTIME','SCHEDULER_SHUTDOWN','PROCESS_RESTART')),
     CHECK (error IS NULL OR length(error) BETWEEN 1 AND 4000),
     CHECK ((status='RUNNING' AND completed_at_ms IS NULL AND error IS NULL)
         OR (status='SUCCEEDED' AND completed_at_ms IS NOT NULL AND error IS NULL)
@@ -244,6 +253,18 @@ class SQLiteRepository:
                 connection.execute(
                     "ALTER TABLE runs ADD COLUMN notification_dedup_json TEXT NOT NULL "
                     "DEFAULT '[]' CHECK (json_valid(notification_dedup_json))"
+                )
+            if "notification_outcomes_json" not in run_columns:
+                connection.execute(
+                    "ALTER TABLE runs ADD COLUMN notification_outcomes_json TEXT NOT NULL "
+                    "DEFAULT '[]' CHECK (json_valid(notification_outcomes_json))"
+                )
+            if "scheduler_outcome" not in run_columns:
+                connection.execute(
+                    "ALTER TABLE runs ADD COLUMN scheduler_outcome TEXT CHECK "
+                    "(scheduler_outcome IS NULL OR scheduler_outcome IN "
+                    "('SUCCEEDED','SUCCEEDED_WITH_WARNINGS','FAILED','OVERLAP_SKIPPED',"
+                    "'MAXIMUM_RUNTIME','SCHEDULER_SHUTDOWN','PROCESS_RESTART'))"
                 )
 
     def store_candle_page(
@@ -446,7 +467,11 @@ class SQLiteRepository:
             else "FAILED"
         )
         return self.finish_run(
-            attempt_id, terminal_status, completed_at_ms=completed_at_ms, error=error
+            attempt_id,
+            terminal_status,
+            completed_at_ms=completed_at_ms,
+            error=error,
+            scheduler_outcome=outcome,
         )
 
     def notification_delivered_at(self, destination_id: str, deduplication_id: str) -> int | None:
@@ -513,6 +538,140 @@ class SQLiteRepository:
         finally:
             connection.close()
 
+    def store_notification_outcomes(self, records: tuple[NotificationDeliveryRecord, ...]) -> None:
+        if not records:
+            return
+        for record in records:
+            self._validate_notification_outcome(record)
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            by_run: dict[str, list[NotificationDeliveryRecord]] = {}
+            for record in records:
+                by_run.setdefault(record.run_id, []).append(record)
+            for run_id, additions in by_run.items():
+                row = connection.execute(
+                    "SELECT notification_outcomes_json FROM runs WHERE run_id=?", (run_id,)
+                ).fetchone()
+                if row is None:
+                    raise KeyError("unknown notification run identity")
+                current = self._notification_outcome_records(row[0], run_id)
+                current.extend(additions)
+                connection.execute(
+                    "UPDATE runs SET notification_outcomes_json=? WHERE run_id=?",
+                    (
+                        self._canonical_json(
+                            [
+                                self._notification_outcome_payload(record)
+                                for record in current[-100:]
+                            ]
+                        ),
+                        run_id,
+                    ),
+                )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def load_notification_outcomes(self, run_id: str) -> tuple[NotificationDeliveryRecord, ...]:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT notification_outcomes_json FROM runs WHERE run_id=?", (run_id,)
+            ).fetchone()
+        if row is None:
+            raise KeyError("unknown notification run identity")
+        return tuple(self._notification_outcome_records(row[0], run_id))
+
+    @classmethod
+    def _notification_outcome_records(
+        cls, encoded: object, run_id: str
+    ) -> list[NotificationDeliveryRecord]:
+        if type(encoded) is not str:
+            raise RuntimeError("invalid notification outcome state")
+        try:
+            payload = json.loads(encoded)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("invalid notification outcome state") from exc
+        fields = {
+            "destination_id",
+            "adapter_id",
+            "attempted_at_seconds",
+            "attempts",
+            "outcome",
+            "reason_code",
+            "status_code",
+        }
+        if type(payload) is not list or len(payload) > 100:
+            raise RuntimeError("invalid notification outcome state")
+        records: list[NotificationDeliveryRecord] = []
+        for item in payload:
+            if type(item) is not dict or set(item) != fields:
+                raise RuntimeError("invalid notification outcome state")
+            record = NotificationDeliveryRecord(run_id=run_id, **item)
+            try:
+                cls._validate_notification_outcome(record)
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError("invalid notification outcome state") from exc
+            records.append(record)
+        return records
+
+    @staticmethod
+    def _notification_outcome_payload(record: NotificationDeliveryRecord) -> dict[str, object]:
+        return {
+            "destination_id": record.destination_id,
+            "adapter_id": record.adapter_id,
+            "attempted_at_seconds": record.attempted_at_seconds,
+            "attempts": record.attempts,
+            "outcome": record.outcome,
+            "reason_code": record.reason_code,
+            "status_code": record.status_code,
+        }
+
+    @staticmethod
+    def _validate_notification_outcome(record: NotificationDeliveryRecord) -> None:
+        if type(record.run_id) is not str or not record.run_id:
+            raise ValueError("invalid notification run identity")
+        if type(record.destination_id) is not str or not 1 <= len(record.destination_id) <= 64:
+            raise ValueError("invalid notification destination identity")
+        if type(record.adapter_id) is not str or not 1 <= len(record.adapter_id) <= 64:
+            raise ValueError("invalid notification adapter identity")
+        if type(record.attempted_at_seconds) is not int or record.attempted_at_seconds < 0:
+            raise ValueError("invalid notification outcome time")
+        if type(record.attempts) is not int or not 0 <= record.attempts <= 5:
+            raise ValueError("invalid notification attempt count")
+        if record.outcome == "SUCCESS":
+            valid = (
+                record.attempts >= 1
+                and record.reason_code is None
+                and type(record.status_code) is int
+                and 200 <= record.status_code < 300
+            )
+        elif record.outcome == "FAILURE":
+            valid = (
+                (
+                    record.reason_code == "ADAPTER_UNAVAILABLE"
+                    and record.attempts == 0
+                    and record.status_code is None
+                )
+                or (
+                    record.reason_code == "TRANSPORT_ERROR"
+                    and record.attempts >= 1
+                    and record.status_code is None
+                )
+                or (
+                    type(record.status_code) is int
+                    and 100 <= record.status_code <= 599
+                    and record.reason_code == f"HTTP_{record.status_code}"
+                )
+            )
+        else:
+            valid = False
+        if not valid:
+            raise ValueError("invalid notification outcome")
+
     @staticmethod
     def _validate_notification_identity(destination_id: object, deduplication_id: object) -> None:
         if type(destination_id) is not str or not 1 <= len(destination_id) <= 64:
@@ -555,10 +714,19 @@ class SQLiteRepository:
         return records
 
     def finish_run(
-        self, run_id: str, status: str, *, completed_at_ms: int, error: str | None
+        self,
+        run_id: str,
+        status: str,
+        *,
+        completed_at_ms: int,
+        error: str | None,
+        scheduler_outcome: str | None = None,
     ) -> RunRecord:
         if status not in {"SUCCEEDED", "FAILED"}:
             raise ValueError("terminal run status must be SUCCEEDED or FAILED")
+        allowed_scheduler_outcomes = RUN_RECEIPT_SUCCESS_STATUSES | SCHEDULER_FAILURE_OUTCOMES
+        if scheduler_outcome is not None and scheduler_outcome not in allowed_scheduler_outcomes:
+            raise ValueError("invalid scheduler outcome")
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
@@ -567,14 +735,15 @@ class SQLiteRepository:
                 raise KeyError("unknown run ID")
             if row["status"] == "RUNNING":
                 connection.execute(
-                    "UPDATE runs SET status=?,completed_at_ms=?,error=? "
+                    "UPDATE runs SET status=?,completed_at_ms=?,error=?,scheduler_outcome=? "
                     "WHERE run_id=? AND status='RUNNING'",
-                    (status, completed_at_ms, error, run_id),
+                    (status, completed_at_ms, error, scheduler_outcome, run_id),
                 )
             elif (
                 row["status"] != status
                 or row["completed_at_ms"] != completed_at_ms
                 or row["error"] != error
+                or row["scheduler_outcome"] != scheduler_outcome
             ):
                 raise PersistenceConflictError("PERSISTENCE_CONFLICT for terminal run state")
             connection.commit()

@@ -13,6 +13,7 @@ from smc_ict.configuration.models import NotificationDestination
 
 from .generic_webhook import GenericWebhookNotifier
 
+_USER_AGENT = "smc-ict-engine/0.1 discord-webhook"
 _EVENT_PRESENTATION = {
     "run_started": ("Run started", 0x3498DB),
     "run_succeeded": ("Run succeeded", 0x2ECC71),
@@ -140,7 +141,10 @@ class DiscordWebhookNotifier:
                 request = Request(
                     self._endpoint,
                     data=body,
-                    headers={"Content-Type": "application/json"},
+                    headers={
+                        "Content-Type": "application/json",
+                        "User-Agent": _USER_AGENT,
+                    },
                     method="POST",
                 )
                 with self._opener(  # type: ignore[attr-defined]

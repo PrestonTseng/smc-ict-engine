@@ -5,6 +5,7 @@ from email.message import Message
 from pathlib import Path
 from typing import Any, cast
 from urllib.error import HTTPError
+from urllib.request import Request
 
 import pytest
 
@@ -229,6 +230,49 @@ def test_discord_adapter_posts_native_json_and_accepts_204() -> None:
             }
         ],
     }
+
+
+def test_discord_adapter_user_agent_closes_fake_https_403_to_204_differential() -> None:
+    from smc_ict.adapters.notifications.discord_webhook import DiscordWebhookNotifier
+
+    expected_user_agent = "smc-ict-engine/0.1 discord-webhook"
+    observed_user_agents: list[str | None] = []
+
+    class Response:
+        def __enter__(self) -> Response:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def getcode(self) -> int:
+            return 204
+
+    def fake_discord_https(request: Request, *, timeout: float = 2) -> Response:
+        assert timeout == 2
+        user_agent = request.get_header("User-agent")
+        observed_user_agents.append(user_agent)
+        if user_agent != expected_user_agent:
+            raise HTTPError(request.full_url, 403, "forbidden", Message(), None)
+        return Response()
+
+    endpoint = "https://discord.invalid/api/webhooks/id/token"
+    with pytest.raises(HTTPError) as missing_header:
+        fake_discord_https(Request(endpoint, data=b"{}", method="POST"))
+
+    receipt = DiscordWebhookNotifier(
+        "discord_debug",
+        _destination(),
+        environ={"DISCORD_HOOK": endpoint},
+        opener=fake_discord_https,
+    ).deliver(NotificationEvent("run_started", "run-1", None, "strategy", 1, {}))
+
+    assert missing_header.value.code == 403
+    assert receipt.outcome == "SUCCESS"
+    assert receipt.status_code == 204
+    assert receipt.attempts == 1
+    assert observed_user_agents == [None, expected_user_agent]
+    assert "token" not in expected_user_agent
 
 
 def test_discord_adapter_honors_rate_limit_then_retries_server_failure() -> None:

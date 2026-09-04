@@ -264,7 +264,7 @@ def test_scheduler_and_sqlite_fail_closed_when_an_operation_bypasses_child_valid
                 status="SUCCEEDED_WITH_WARNINGS", error="NOTIFICATION_WARNING: delivery"
             ),
             ("SUCCEEDED", None),
-            "INFO",
+            "WARNING",
             id="success-with-warnings",
         ),
         pytest.param(
@@ -321,6 +321,37 @@ def test_managed_scheduler_preserves_exact_valid_child_receipts(
     assert records[0].outcome == receipt.status
     assert records[0].child_run_id == receipt.run_id
     assert _UNTRUSTED_CHILD_TEXT not in caplog.text
+
+
+def test_scheduler_persists_and_warns_on_child_success_with_warnings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    payload = _child_receipt_payload(
+        status="SUCCEEDED_WITH_WARNINGS", error="NOTIFICATION_WARNING: delivery"
+    )
+
+    receipt, _rows, records = _run_managed_receipt(
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        caplog=caplog,
+        returncode=0,
+        stdout=json.dumps(payload),
+    )
+
+    from smc_ict.adapters.persistence.sqlite import SQLiteRepository
+
+    SQLiteRepository(tmp_path / "receipt.sqlite3")
+    with sqlite3.connect(tmp_path / "receipt.sqlite3") as connection:
+        durable = connection.execute(
+            "SELECT status,error,scheduler_outcome FROM runs "
+            "WHERE strategy_name='scheduler:fixture-job'"
+        ).fetchone()
+
+    assert receipt.status == "SUCCEEDED_WITH_WARNINGS"
+    assert durable == ("SUCCEEDED", None, "SUCCEEDED_WITH_WARNINGS")
+    assert len(records) == 1
+    assert records[0].levelname == "WARNING"
+    assert records[0].outcome == "SUCCEEDED_WITH_WARNINGS"
 
 
 @pytest.mark.parametrize(

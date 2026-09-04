@@ -81,6 +81,65 @@ def test_sqlite_exact_schema_idempotent_pages_conflicts_and_contiguous_sync(tmp_
     )
 
 
+def test_sqlite_additive_notification_migration_preserves_existing_v1_rows(
+    tmp_path: Path,
+) -> None:
+    from smc_ict.adapters.persistence.sqlite import DDL, SQLiteRepository
+
+    path = tmp_path / "legacy-v1.db"
+    legacy_ddl = (
+        DDL.replace("    notification_outcomes_json TEXT NOT NULL DEFAULT '[]',\n", "")
+        .replace("    scheduler_outcome TEXT,\n", "")
+        .replace("    CHECK (json_valid(notification_outcomes_json)),\n", "")
+        .replace(
+            "    CHECK (scheduler_outcome IS NULL OR scheduler_outcome IN\n"
+            "        ('SUCCEEDED','SUCCEEDED_WITH_WARNINGS','FAILED','OVERLAP_SKIPPED',\n"
+            "         'MAXIMUM_RUNTIME','SCHEDULER_SHUTDOWN','PROCESS_RESTART')),\n",
+            "",
+        )
+    )
+    with sqlite3.connect(path) as connection:
+        connection.executescript(f"{legacy_ddl}\nPRAGMA user_version=1;")
+        connection.execute(
+            "INSERT INTO runs "
+            "(run_id,status,started_at_ms,completed_at_ms,strategy_name,strategy_version,"
+            "strategy_config_hash,provider_id,market_type,market_config_hash,git_commit,"
+            "data_start_open_ms,data_end_close_ms,data_hash,notification_dedup_json,error) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "legacy-run",
+                "SUCCEEDED",
+                1,
+                2,
+                "legacy",
+                "1",
+                "a" * 64,
+                "provider",
+                "LINEAR_PERPETUAL",
+                "b" * 64,
+                "c" * 40,
+                0,
+                59_999,
+                "d" * 64,
+                "[]",
+                None,
+            ),
+        )
+
+    SQLiteRepository(path)
+
+    with sqlite3.connect(path) as connection:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(runs)")}
+        retained = connection.execute(
+            "SELECT status,strategy_name,notification_dedup_json,"
+            "notification_outcomes_json,scheduler_outcome FROM runs WHERE run_id='legacy-run'"
+        ).fetchone()
+        integrity = connection.execute("PRAGMA integrity_check").fetchone()
+    assert {"notification_outcomes_json", "scheduler_outcome"} <= columns
+    assert retained == ("SUCCEEDED", "legacy", "[]", "[]", None)
+    assert integrity == ("ok",)
+
+
 def test_sqlite_run_observation_and_decision_batches_are_idempotent_and_atomic(
     tmp_path: Path,
 ) -> None:

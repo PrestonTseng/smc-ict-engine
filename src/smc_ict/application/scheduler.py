@@ -176,7 +176,7 @@ class InternalScheduler:
         self._repository.finish_scheduler_attempt(
             attempt_id, durable_outcome, completed_at_ms=completed
         )
-        log = LOGGER.info if durable_outcome in RUN_RECEIPT_SUCCESS_STATUSES else LOGGER.warning
+        log = LOGGER.info if durable_outcome == "SUCCEEDED" else LOGGER.warning
         child_run_id = (
             receipt.run_id
             if receipt.status in RUN_RECEIPT_STATUSES and is_canonical_run_id(receipt.run_id)

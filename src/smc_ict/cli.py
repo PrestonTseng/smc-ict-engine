@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import logging
 import os
 import signal
 import sys
@@ -21,6 +22,56 @@ from smc_ict.configuration import (
     load_schedule,
     load_strategy,
 )
+
+_STRUCTURED_LOG_FIELDS = (
+    "destination_id",
+    "adapter_id",
+    "attempted_at_seconds",
+    "attempts",
+    "outcome",
+    "reason_code",
+    "status_code",
+    "attempt_id",
+    "job_id",
+    "child_run_id",
+    "event_type",
+    "run_id",
+)
+_STRUCTURED_LOG_EVENTS = frozenset(
+    {
+        "notification_delivery_outcome",
+        "scheduler_job_receipt",
+        "scheduler_job_overlap_skipped",
+        "notification_batch_failed",
+        "notification_event_failed",
+    }
+)
+
+
+class _StructuredLogFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        event = record.msg if type(record.msg) is str else "application_log"
+        payload: dict[str, object] = {
+            "event": event if event in _STRUCTURED_LOG_EVENTS else "application_log"
+        }
+        for field in _STRUCTURED_LOG_FIELDS:
+            value = getattr(record, field, None)
+            if value is None or type(value) in (bool, int):
+                if hasattr(record, field):
+                    payload[field] = value
+            elif type(value) is str:
+                payload[field] = value[:200]
+        return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
+def _configure_logging() -> None:
+    handler = logging.StreamHandler()
+    handler.setFormatter(_StructuredLogFormatter())
+    logger = logging.getLogger("smc_ict")
+    logger.handlers.clear()
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -187,6 +238,7 @@ def _execute(args: argparse.Namespace) -> dict[str, object]:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Parse arguments, delegate once, and map bounded failures to exit code 2."""
+    _configure_logging()
     try:
         payload = _execute(_parser().parse_args(argv))
     except (OSError, RuntimeError, ValueError) as exc:

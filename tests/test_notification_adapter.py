@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+from typing import Any
 from urllib.error import HTTPError
 
 import pytest
@@ -102,6 +104,111 @@ def test_generic_webhook_invalid_secret_never_echoes_its_value() -> None:
         assert "not-a-url-secret" not in str(exc)
     else:
         raise AssertionError("invalid secret was accepted")
+
+
+@pytest.mark.parametrize(
+    "line_ending", [pytest.param("\n", id="lf"), pytest.param("\r\n", id="crlf")]
+)
+def test_generic_webhook_accepts_one_terminal_line_ending_from_file(
+    monkeypatch: pytest.MonkeyPatch, line_ending: str
+) -> None:
+    from smc_ict.adapters.notifications.generic_webhook import GenericWebhookNotifier
+    from smc_ict.application.ports import NotificationEvent
+    from smc_ict.configuration.models import (
+        BatchingConfig,
+        DeduplicationConfig,
+        NotificationDestination,
+        RedactionConfig,
+        RetryConfig,
+        SecretRef,
+    )
+
+    endpoint = "https://example.invalid/path?token=hidden"
+    monkeypatch.setattr(Path, "read_text", lambda *_args, **_kwargs: endpoint + line_ending)
+    destination = NotificationDestination(
+        "generic_webhook",
+        True,
+        ("run_started",),
+        SecretRef("file", "/run/secrets/webhook"),
+        1,
+        RetryConfig(1, ()),
+        DeduplicationConfig(1, ("event_type", "run_id")),
+        BatchingConfig(1, 1),
+        RedactionConfig((), ()),
+        "warning",
+    )
+    requested_urls: list[str] = []
+
+    class Response:
+        def __enter__(self) -> Response:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def getcode(self) -> int:
+            return 204
+
+    def opened(request: Any, *, timeout: float) -> Response:
+        requested_urls.append(request.full_url)
+        assert timeout == 1
+        return Response()
+
+    receipt = GenericWebhookNotifier("alpha", destination, opener=opened).deliver(
+        NotificationEvent("run_started", "run", None, "strategy", 1, {})
+    )
+
+    assert receipt.outcome == "SUCCESS"
+    assert requested_urls == [endpoint]
+
+
+@pytest.mark.parametrize(
+    "secret",
+    [
+        " https://example.invalid/path",
+        "https://example.invalid/path ",
+        "https://example.invalid/path\t",
+        "https://example.invalid/path\n\n",
+        "https://example.invalid/path\r\n\r\n",
+        "https://example.invalid/path\r",
+        "https://example.invalid/\npath",
+        "https://example.invalid/\rpath",
+        "https://example.invalid/path\x00",
+        "https://example.invalid/path\x85",
+        "\n",
+    ],
+)
+def test_generic_webhook_rejects_other_file_secret_whitespace_and_controls(
+    monkeypatch: pytest.MonkeyPatch, secret: str
+) -> None:
+    from smc_ict.adapters.notifications.generic_webhook import GenericWebhookNotifier
+    from smc_ict.configuration.models import (
+        BatchingConfig,
+        DeduplicationConfig,
+        NotificationDestination,
+        RedactionConfig,
+        RetryConfig,
+        SecretRef,
+    )
+
+    monkeypatch.setattr(Path, "read_text", lambda *_args, **_kwargs: secret)
+    destination = NotificationDestination(
+        "generic_webhook",
+        True,
+        ("run_started",),
+        SecretRef("file", "/run/secrets/webhook"),
+        1,
+        RetryConfig(1, ()),
+        DeduplicationConfig(1, ("event_type", "run_id")),
+        BatchingConfig(1, 1),
+        RedactionConfig((), ()),
+        "warning",
+    )
+
+    with pytest.raises(ValueError, match="notification endpoint") as caught:
+        GenericWebhookNotifier("alpha", destination)
+
+    assert secret not in str(caught.value)
 
 
 def test_generic_webhook_does_not_retry_permanent_http_400() -> None:

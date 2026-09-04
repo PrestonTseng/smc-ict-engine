@@ -55,6 +55,20 @@ class NotificationDedupRecord:
     delivered_at_seconds: int
 
 
+@dataclass(frozen=True, slots=True)
+class NotificationDeliveryRecord:
+    """One bounded redacted durable notification transport outcome."""
+
+    run_id: str
+    destination_id: str
+    adapter_id: str
+    attempted_at_seconds: int
+    attempts: int
+    outcome: str
+    reason_code: str | None
+    status_code: int | None
+
+
 @runtime_checkable
 class NotificationDeduplicationStore(Protocol):
     def notification_delivered_at(
@@ -63,6 +77,10 @@ class NotificationDeduplicationStore(Protocol):
 
     def store_notification_deliveries(
         self, records: tuple[NotificationDedupRecord, ...]
+    ) -> None: ...
+
+    def store_notification_outcomes(
+        self, records: tuple[NotificationDeliveryRecord, ...]
     ) -> None: ...
 
 

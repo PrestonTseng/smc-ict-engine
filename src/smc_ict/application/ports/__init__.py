@@ -17,6 +17,7 @@ from .notifications import (
     DeliveryReceipt,
     NotificationDeduplicationStore,
     NotificationDedupRecord,
+    NotificationDeliveryRecord,
     NotificationEvent,
     Notifier,
 )
@@ -35,6 +36,7 @@ __all__ = [
     "KlineRequest",
     "NotificationDedupRecord",
     "NotificationDeduplicationStore",
+    "NotificationDeliveryRecord",
     "NotificationEvent",
     "Notifier",
     "ObservationRecord",
