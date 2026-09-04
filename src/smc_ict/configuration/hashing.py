@@ -37,5 +37,9 @@ def hash_strategy(config: CanonicalModel) -> str:
     return _hash(b"strategy-v2\0", config.canonical_dict())
 
 
+def hash_backtest(config: CanonicalModel) -> str:
+    return _hash(b"backtest-scenario-v1\0", config.canonical_dict())
+
+
 def hash_notifications(config: RedactedModel) -> str:
     return _hash(b"notification-v1\0", config.redacted_dict())

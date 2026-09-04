@@ -1,0 +1,19 @@
+backtest:
+  name: one-year-baseline
+  version: "1"
+  strategy: source-aligned-research.yaml
+  period:
+    start: "2025-09-01T00:00:00Z"
+    end: "2026-08-31T23:59:00Z"
+  entry:
+    mode: touch_limit
+    expiry_execution_bars: 6
+  execution:
+    maximum_holding_minutes: 360
+    intrabar_conflict: stop_first
+    allow_same_minute_target: false
+  costs:
+    taker_fee_bps: "5"
+    adverse_slippage_bps: "2"
+  output:
+    existing_result: fail
