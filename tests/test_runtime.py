@@ -9,6 +9,93 @@ from typing import Any, cast
 import pytest
 
 
+def test_runtime_paths_are_fixed_derivations_of_the_required_data_folder(tmp_path: Path) -> None:
+    from smc_ict.composition.runtime_services import RuntimePaths
+
+    paths = RuntimePaths.from_environ({"DATA_FOLDER": str(tmp_path)})
+
+    assert paths.database == tmp_path / "smc_ict.db"
+    assert paths.lock == tmp_path / "engine.lock"
+    assert paths.health == tmp_path / "scheduler.ready"
+    assert paths.backtests == tmp_path / "backtests"
+    with pytest.raises(ValueError, match="DATA_FOLDER"):
+        RuntimePaths.from_environ({})
+    with pytest.raises(ValueError, match="absolute normalized"):
+        RuntimePaths.from_environ({"DATA_FOLDER": "relative/data"})
+
+
+def test_run_readiness_uses_historical_sync_service_before_analysis(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from smc_ict.application import runtime
+    from smc_ict.application.ports import InstrumentMapping
+    from smc_ict.configuration.models import (
+        MarketDataConfig,
+        NotificationConfig,
+        StrategyConfig,
+        frozen_mapping,
+    )
+
+    class ReadinessFailure(RuntimeError):
+        pass
+
+    calls: list[tuple[InstrumentMapping, int, int]] = []
+
+    class HistoricalSync:
+        def __init__(self, provider: object, repository: object) -> None:
+            assert isinstance(provider, Provider)
+            assert repository is not None
+
+        def sync_range(
+            self, mapping: InstrumentMapping, start_open_time_ms: int, end_open_time_ms: int
+        ) -> object:
+            calls.append((mapping, start_open_time_ms, end_open_time_ms))
+            raise ReadinessFailure("readiness failed")
+
+    class Provider:
+        provider_id = "binance_usdm"
+
+        def latest_closed_open_time_ms(self) -> int:
+            return 120_000
+
+        def fetch_page(self, _request: object) -> object:
+            raise AssertionError("run bypassed the shared readiness service")
+
+    strategy = StrategyConfig(
+        "fixture-strategy",
+        "1",
+        ("BTC-USDT-PERP",),
+        2,
+        frozen_mapping({"execution": "5m"}),
+        (),
+    )
+    market = MarketDataConfig(
+        "binance_usdm",
+        "LINEAR_PERPETUAL",
+        frozen_mapping({"BTC-USDT-PERP": "BTCUSDT"}),
+    )
+    config = runtime.RuntimeConfiguration(
+        strategy,
+        market,
+        NotificationConfig(False, frozen_mapping({})),
+    )
+    monkeypatch.setattr(runtime, "HistoricalRangeSyncService", HistoricalSync, raising=False)
+    runner = runtime.EngineRunner(
+        repository=cast(Any, object()),
+        provider_factory=lambda _market: cast(Any, Provider()),
+        plugin_factories={},
+        lock_path=tmp_path / "engine.lock",
+        config_loader=lambda _request: config,
+        clock_ms=lambda: 120_000,
+        git_commit="a" * 40,
+    )
+
+    with pytest.raises(ReadinessFailure, match="readiness failed"):
+        runner._run_locked(runtime.RunRequest("strategy.yaml", "market.yaml", None, "manual"), 0)
+
+    assert calls == [(InstrumentMapping("BTC-USDT-PERP", "BTCUSDT"), 60_000, 120_000)]
+
+
 def _hold_process_lock(path: str, ready: Any) -> None:
     from smc_ict.application.runtime import ProcessLock
 

@@ -17,7 +17,7 @@ from typing import TextIO
 from smc_ict.application.decision_policy import OrderedDecisionPlugin, configured_decision_signals
 from smc_ict.application.evidence import decision_record, observation_record
 from smc_ict.application.graph import IndicatorFactory, IndicatorGraph, RunContext, configured_nodes
-from smc_ict.application.market_sync import MarketSyncService
+from smc_ict.application.historical_sync import HistoricalRangeSyncService
 from smc_ict.application.ports import (
     InstrumentMapping,
     KlineProvider,
@@ -217,13 +217,13 @@ class EngineRunner:
 
         all_candles: list[ClosedCandle] = []
         by_instrument = {}
-        sync = MarketSyncService(provider, self.repository)
+        sync = HistoricalRangeSyncService(provider, self.repository)
         for instrument_id in strategy.instruments:
             candles = sync.sync_range(
                 InstrumentMapping(instrument_id, market.instruments[instrument_id]),
                 first_open,
                 latest_open,
-            )
+            ).candles
             by_instrument[instrument_id] = candles
             all_candles.extend(candles)
         data_hash = hash_candles(all_candles)
