@@ -71,9 +71,9 @@ def test_browser_probe_bounds_sparse_filter_evaluation_decoding(tmp_path: Path) 
 
     probed = subprocess.run(
         [
-            "uvx",
-            "--from",
-            "playwright",
+            "uv",
+            "run",
+            "--locked",
             "python",
             "scripts/probe_backtest_report.py",
             str(Path(benchmark["result_path"]) / "report.html"),
