@@ -86,10 +86,6 @@ class BacktestReportPublisher:
             trade_rows = [item.canonical_dict() for item in simulation.trades]
             summary = metrics.canonical_dict()
             manifest_base = self._manifest_base(identity, scenario, strategy, market_data, replay)
-            html_traces = [
-                row | {"disposition": item.decision.status}
-                for row, item in zip(trace_rows, replay.evaluations, strict=True)
-            ]
             payloads = {
                 "decisions.jsonl": _canonical_jsonl(decision_rows),
                 "pipeline-traces.jsonl": _canonical_jsonl(trace_rows),
@@ -98,7 +94,9 @@ class BacktestReportPublisher:
                 "report.html": render_report(
                     manifest=manifest_base,
                     summary=summary,
-                    traces=html_traces,
+                    decisions=decision_rows,
+                    traces=trace_rows,
+                    trades=trade_rows,
                 ),
             }
             for name, payload in payloads.items():

