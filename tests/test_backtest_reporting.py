@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
+import zlib
 from decimal import ROUND_DOWN, ROUND_UP, localcontext
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -115,9 +118,20 @@ def _html_evidence(path: Path) -> dict[str, object]:
     html = path.read_text(encoding="utf-8")
     marker = '<script id="backtest-evidence" type="application/json" nonce="backtest-report">'
     payload = html.split(marker, 1)[1].split("</script>", 1)[0]
-    evidence = json.loads(payload)
-    assert isinstance(evidence, dict)
-    return evidence
+    store = json.loads(payload)
+    assert isinstance(store, dict)
+
+    def decode(encoded: str) -> Any:
+        return json.loads(zlib.decompress(base64.b64decode(encoded), wbits=31))
+
+    evaluations = [item for encoded in store["evaluation_chunks"] for item in decode(encoded)]
+    return {
+        "manifest": decode(store["manifest"]),
+        "summary": decode(store["summary"]),
+        "decisions": [item["decision"] for item in evaluations],
+        "traces": [item["trace"] for item in evaluations],
+        "trades": [trade for encoded in store["trade_chunks"] for trade in decode(encoded)],
+    }
 
 
 def _publish(root: Path):
@@ -286,7 +300,40 @@ def test_byte_identical_rerun_reuses_result_and_tampering_fails_closed(tmp_path:
     assert not tuple(tmp_path.glob(f".{identity.backtest_id}.*"))
 
 
+def test_identical_result_comparison_streams_artifacts_without_read_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _publish(tmp_path)
+
+    monkeypatch.setattr(
+        Path,
+        "read_bytes",
+        lambda _path: (_ for _ in ()).throw(AssertionError("whole artifact read")),
+    )
+
+    _, receipt = _publish(tmp_path)
+
+    assert receipt.status == "EXISTING_IDENTICAL"
+
+
 def test_report_failure_leaves_no_partial_result_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from smc_ict.adapters.reporting import jsonl
+
+    monkeypatch.setattr(
+        jsonl.html_reporting,
+        "write_report",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("render failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="render failed"):
+        _publish(tmp_path)
+
+    assert not tuple(tmp_path.iterdir())
+
+
+def test_report_publication_streams_html_instead_of_rendering_one_bytes_value(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from smc_ict.adapters.reporting import jsonl
@@ -294,13 +341,12 @@ def test_report_failure_leaves_no_partial_result_directory(
     monkeypatch.setattr(
         jsonl,
         "render_report",
-        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("render failed")),
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("in-memory renderer called")),
     )
 
-    with pytest.raises(RuntimeError, match="render failed"):
-        _publish(tmp_path)
+    _, receipt = _publish(tmp_path)
 
-    assert not tuple(tmp_path.iterdir())
+    assert (receipt.path / "report.html").read_bytes().startswith(b"<!doctype html>")
 
 
 def test_existing_result_symlink_is_never_trusted(tmp_path: Path) -> None:
@@ -384,6 +430,7 @@ def test_html_is_offline_and_exposes_complete_trace_filters(tmp_path: Path) -> N
     assert "<script src=" not in html and '<link rel="stylesheet"' not in html
     for control in (
         'id="instrument-filter"',
+        'id="direction-filter"',
         'id="evaluation-filter"',
         'id="status-filter"',
         'id="failed-step-filter"',
@@ -392,11 +439,10 @@ def test_html_is_offline_and_exposes_complete_trace_filters(tmp_path: Path) -> N
         assert control in html
     steps = trace["steps"]
     assert isinstance(steps, list)
+    embedded_trace = _html_evidence(receipt.path / "report.html")["traces"][0]
     for step in steps:
         assert isinstance(step, dict)
-        assert step["step_id"] in html
-        assert step["state"] in html
-        assert step["reason"] in html
+        assert step in embedded_trace["steps"]
     assert "first rejection" in html
 
 
@@ -498,8 +544,20 @@ def test_html_bounds_trace_dom_and_exposes_filter_and_page_boundaries(tmp_path: 
     assert isinstance(embedded_traces, list)
     assert len(embedded_traces) == count
     assert "const PAGE_SIZE=25" in html
-    assert "return rows.slice(start,start+PAGE_SIZE)" in html
-    assert "Math.max(0,Math.min(pages[kind],pageCount(rows)-1))" in html
+    assert "index<Math.min(start+PAGE_SIZE,count)" in html
+    assert "Math.max(0,Math.min(pages[kind],pageCount(count)-1))" in html
+    assert "Array.from({length:count}" not in html
+    assert "Array.from({length:store.evaluation_count}" not in html
+    assert "pageRange('trade',count)" in html
+    assert "pageRange('decision',store.evaluation_count)" in html
+    assert "const matches=[]" not in html
+    assert "matchingCount()" not in html
+    assert "matchingPage(count)" not in html
+    assert "Promise.all(store.evaluation_index_chunks.map(gunzip))" not in html
+    assert "evaluationIndexChunks" not in html
+    assert "async function matchingPageAndCount()" in html
+    assert "for(const encoded of store.evaluation_index_chunks)" in html
+    assert "if(!hasFilters())" in html
     for control in (
         'id="trace-first"',
         'id="trace-prev"',
@@ -509,6 +567,66 @@ def test_html_bounds_trace_dom_and_exposes_filter_and_page_boundaries(tmp_path: 
         'id="trace-last"',
     ):
         assert control in html
-    assert "pages.trace=0;renderTraces()" in html
-    assert "pages.trace=pageCount(matchingTraces())-1" in html
+    assert "pages.trace=0;void renderTraces()" in html
+    assert "pages.trace=pageCount(traceMatchCount)-1" in html
     assert "pages.trace=Number(document.getElementById('trace-page-input').value)-1" in html
+
+
+def test_html_uses_deterministic_compressed_chunks_with_at_most_25_evaluations(
+    tmp_path: Path,
+) -> None:
+    from smc_ict.adapters.reporting.html import render_report
+
+    count = 53
+    decisions = [
+        {
+            "instrument_id": f"instrument-{index % 2}",
+            "evaluation_time_ms": index,
+            "decision": {
+                "status": "NO_TRADE" if index % 2 else "READY",
+                "direction": "SHORT" if index % 2 else "LONG",
+            },
+        }
+        for index in range(count)
+    ]
+    traces = [
+        {
+            "instrument_id": f"instrument-{index % 2}",
+            "evaluation_time_ms": index,
+            "first_rejection": "gate" if index % 2 else None,
+            "steps": [{"reason": f"reason-{index}"}],
+        }
+        for index in range(count)
+    ]
+    kwargs = {
+        "manifest": {"backtest_id": "chunked"},
+        "summary": {
+            "overall": {"status_counts": [], "exit_reason_counts": []},
+            "by_instrument": [],
+            "by_direction": [],
+            "decision_status_counts": [],
+            "unavailable_reason_counts": [],
+        },
+        "decisions": decisions,
+        "traces": traces,
+        "trades": [],
+    }
+
+    first = render_report(**kwargs)
+    second = render_report(**kwargs)
+
+    assert first == second
+    marker = b'<script id="backtest-evidence" type="application/json" nonce="backtest-report">'
+    payload = json.loads(first.split(marker, 1)[1].split(b"</script>", 1)[0])
+    assert payload["schema_version"] == 2
+    assert payload["compression"] == "gzip"
+    assert len(payload["evaluation_chunks"]) == 3
+    decoded_chunks = [
+        json.loads(zlib.decompress(base64.b64decode(chunk), wbits=31))
+        for chunk in payload["evaluation_chunks"]
+    ]
+    assert [len(chunk) for chunk in decoded_chunks] == [25, 25, 3]
+    assert [item["decision"] for chunk in decoded_chunks for item in chunk] == decisions
+    assert [item["trace"] for chunk in decoded_chunks for item in chunk] == traces
+    assert "DecompressionStream" in first.decode("utf-8")
+    assert "This browser cannot decompress the embedded backtest evidence" in first.decode("utf-8")

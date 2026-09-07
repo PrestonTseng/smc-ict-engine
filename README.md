@@ -135,9 +135,24 @@ The command synchronizes the requested period plus strategy warm-up under the sh
 - `decisions.jsonl` and `pipeline-traces.jsonl` preserve every ordered evaluation, pass/reject/unavailable reason, and first rejection.
 - `trades.jsonl` contains normalized, one-unit simulated outcomes without account sizing.
 - `summary.json` contains overall, instrument, direction, disposition, and unavailable-reason metrics.
-- `report.html` embeds the canonical summary and traces for local filtering and expansion with no CDN or network dependency.
+- `report.html` embeds deterministic gzip chunks of at most 25 canonical evaluations, plus a compact filter index, for lazy local filtering and expansion with no CDN or network dependency. Browsers without the standard `DecompressionStream` gzip primitive show an explicit compatibility failure instead of partial evidence.
 
 An identical rerun verifies and reuses byte-identical output. If any existing artifact differs, the command fails without overwriting it. A failure before publication leaves no partial result directory and never writes backtest rows to the five production tables.
+
+The exact offline one-year report-scale workload and Chromium probe are reproducible without provider access:
+
+```sh
+uv run python scripts/benchmark_backtest_report.py \
+  --output-root /tmp/smc-report-benchmark/reports \
+  --result-json /tmp/smc-report-benchmark/generation.json
+uvx --from playwright playwright install chromium
+uvx --from playwright python scripts/probe_backtest_report.py \
+  /tmp/smc-report-benchmark/reports/<backtest-id>/report.html \
+  --result-json /tmp/smc-report-benchmark/browser.json \
+  --chromium-executable /path/to/chromium
+```
+
+The benchmark defaults to exactly 210,240 evaluations across the configured two instruments at five-minute intervals, with 14 ordered trace steps each. Its JSON separates fixture-generation and publication timing/memory. These are observed measurements, not an SLA.
 
 For Compose, stop the scheduled writer during a long historical fill and use the manual profile, which does not mount or resolve notification secrets:
 

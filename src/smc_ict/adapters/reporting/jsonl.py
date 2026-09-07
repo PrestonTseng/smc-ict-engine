@@ -7,11 +7,12 @@ import os
 import shutil
 import stat
 import tempfile
+from collections.abc import Iterable
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 
-from smc_ict.adapters.reporting.html import render_report
+from smc_ict.adapters.reporting import html as html_reporting
 from smc_ict.application.backtesting import BacktestIdentity
 from smc_ict.application.execution_simulator import SimulationResult
 from smc_ict.application.metrics import MetricsReport
@@ -32,6 +33,9 @@ _ARTIFACT_NAMES = frozenset(
         "trades.jsonl",
     }
 )
+
+# Kept as the small-report compatibility API. Publication deliberately does not call it.
+render_report = html_reporting.render_report
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,37 +77,39 @@ class BacktestReportPublisher:
         destination = self._root / identity.backtest_id
         staging = Path(tempfile.mkdtemp(prefix=f".{identity.backtest_id}.", dir=self._root))
         try:
-            decision_rows = [
-                {
-                    "instrument_id": item.instrument_id,
-                    "evaluation_time_ms": item.evaluation_time_ms,
-                    "decision": item.decision.canonical_dict(),
-                    "decision_hash": item.decision_hash,
-                }
-                for item in replay.evaluations
-            ]
-            trace_rows = [item.trace.canonical_dict() for item in replay.evaluations]
-            trade_rows = [item.canonical_dict() for item in simulation.trades]
             summary = metrics.canonical_dict()
             manifest_base = self._manifest_base(identity, scenario, strategy, market_data, replay)
-            payloads = {
-                "decisions.jsonl": _canonical_jsonl(decision_rows),
-                "pipeline-traces.jsonl": _canonical_jsonl(trace_rows),
-                "trades.jsonl": _canonical_jsonl(trade_rows),
-                "summary.json": _canonical_json(summary),
-                "report.html": render_report(
-                    manifest=manifest_base,
-                    summary=summary,
-                    decisions=decision_rows,
-                    traces=trace_rows,
-                    trades=trade_rows,
-                ),
-            }
-            for name, payload in payloads.items():
-                _write_synced(staging / name, payload)
+
+            def decision_rows() -> Iterable[dict[str, object]]:
+                for item in replay.evaluations:
+                    yield {
+                        "instrument_id": item.instrument_id,
+                        "evaluation_time_ms": item.evaluation_time_ms,
+                        "decision": item.decision.canonical_dict(),
+                        "decision_hash": item.decision_hash,
+                    }
+
+            def trace_rows() -> Iterable[dict[str, object]]:
+                return (item.trace.canonical_dict() for item in replay.evaluations)
+
+            def trade_rows() -> Iterable[dict[str, object]]:
+                return (item.canonical_dict() for item in simulation.trades)
+
+            _write_jsonl_synced(staging / "decisions.jsonl", decision_rows())
+            _write_jsonl_synced(staging / "pipeline-traces.jsonl", trace_rows())
+            _write_jsonl_synced(staging / "trades.jsonl", trade_rows())
+            _write_synced(staging / "summary.json", _canonical_json(summary))
+            _write_report_synced(
+                staging / "report.html",
+                manifest=manifest_base,
+                summary=summary,
+                decisions=decision_rows,
+                traces=trace_rows,
+                trades=trade_rows,
+            )
             artifacts = {
-                name: {"bytes": len(payload), "sha256": sha256(payload).hexdigest()}
-                for name, payload in sorted(payloads.items())
+                name: _file_metadata(staging / name)
+                for name in sorted(_ARTIFACT_NAMES - {"manifest.json"})
             }
             _write_synced(
                 staging / "manifest.json",
@@ -185,6 +191,44 @@ def _canonical_jsonl(rows: list[dict[str, object]]) -> bytes:
     return b"".join(_canonical_json(row) for row in rows)
 
 
+def _write_jsonl_synced(path: Path, rows: Iterable[dict[str, object]]) -> None:
+    with path.open("xb") as handle:
+        for row in rows:
+            handle.write(_canonical_json(row))
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
+def _write_report_synced(
+    path: Path,
+    *,
+    manifest: dict[str, object],
+    summary: dict[str, object],
+    decisions: html_reporting.RowSource,
+    traces: html_reporting.RowSource,
+    trades: html_reporting.RowSource,
+) -> None:
+    with path.open("xb") as handle:
+        html_reporting.write_report(
+            handle,
+            manifest=manifest,
+            summary=summary,
+            decisions=decisions,
+            traces=traces,
+            trades=trades,
+        )
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
+def _file_metadata(path: Path) -> dict[str, object]:
+    digest = sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return {"bytes": path.stat().st_size, "sha256": digest.hexdigest()}
+
+
 def _write_synced(path: Path, payload: bytes) -> None:
     with path.open("xb") as handle:
         handle.write(payload)
@@ -201,11 +245,11 @@ def _sync_directory(path: Path) -> None:
 
 
 def _directories_match(expected: Path, actual: Path) -> bool:
-    expected_payloads = {name: (expected / name).read_bytes() for name in sorted(_ARTIFACT_NAMES)}
-    return _read_direct_regular_files(actual) == expected_payloads
+    expected_metadata = {name: _file_identity(expected / name) for name in sorted(_ARTIFACT_NAMES)}
+    return _read_direct_regular_files(actual) == expected_metadata
 
 
-def _read_direct_regular_files(directory: Path) -> dict[str, bytes] | None:
+def _read_direct_regular_files(directory: Path) -> dict[str, tuple[int, str]] | None:
     no_follow = getattr(os, "O_NOFOLLOW", None)
     directory_only = getattr(os, "O_DIRECTORY", None)
     if no_follow is None or directory_only is None:
@@ -233,7 +277,7 @@ def _read_relative_directory(
     *,
     no_follow: int,
     directory_only: int,
-) -> dict[str, bytes] | None:
+) -> dict[str, tuple[int, str]] | None:
     try:
         descriptor = os.open(
             name,
@@ -254,7 +298,7 @@ def _read_open_directory(
     name: str,
     descriptor: int,
     no_follow: int,
-) -> dict[str, bytes] | None:
+) -> dict[str, tuple[int, str]] | None:
     directory_state = os.fstat(descriptor)
     parent_state = os.fstat(parent_descriptor)
     try:
@@ -313,11 +357,23 @@ def _open_regular_files(
     return opened
 
 
-def _read_descriptor(descriptor: int) -> bytes:
-    chunks: list[bytes] = []
+def _file_identity(path: Path) -> tuple[int, str]:
+    digest = sha256()
+    size = 0
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            size += len(chunk)
+            digest.update(chunk)
+    return size, digest.hexdigest()
+
+
+def _read_descriptor(descriptor: int) -> tuple[int, str]:
+    digest = sha256()
+    size = 0
     while chunk := os.read(descriptor, 1024 * 1024):
-        chunks.append(chunk)
-    return b"".join(chunks)
+        size += len(chunk)
+        digest.update(chunk)
+    return size, digest.hexdigest()
 
 
 def _entries_unchanged(
