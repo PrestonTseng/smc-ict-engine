@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
 import tarfile
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from ruamel.yaml import YAML
@@ -31,6 +33,21 @@ if touch /run/secrets/discord_webhook_url; then
 fi;
 echo PROBE_OK
 """
+
+
+def _run_cli(argv: list[str]) -> int:
+    from smc_ict.cli import main
+
+    logger = logging.getLogger("smc_ict")
+    handlers = list(logger.handlers)
+    level = logger.level
+    propagate = logger.propagate
+    try:
+        return main(argv)
+    finally:
+        logger.handlers[:] = handlers
+        logger.setLevel(level)
+        logger.propagate = propagate
 
 
 def _daemon_visible_project_fixture_candidates() -> tuple[Path, ...]:
@@ -156,19 +173,7 @@ def test_compose_contract_keeps_the_database_in_the_required_bind_mount() -> Non
     compose = YAML(typ="safe").load(compose_path.read_text(encoding="utf-8"))
     service = compose["services"]["engine"]
 
-    assert service["command"] == [
-        "scheduler",
-        "--schedule",
-        "/config/schedule.yaml",
-        "--database",
-        "/data/smc_ict.db",
-        "--lock",
-        "/data/engine.lock",
-        "--health-file",
-        "/data/scheduler.ready",
-        "--config-root",
-        "/",
-    ]
+    assert service["environment"] == {"CONFIG_FOLDER": "/config", "DATA_FOLDER": "/data"}
     assert service["volumes"] == [
         {
             "type": "bind",
@@ -198,13 +203,79 @@ def test_compose_contract_keeps_the_database_in_the_required_bind_mount() -> Non
             "bind": {"create_host_path": False},
         },
     ]
-    assert service["healthcheck"]["test"] == [
-        "CMD",
-        "smc-ict",
-        "scheduler-health",
-        "--health-file",
-        "/data/scheduler.ready",
+
+
+def test_compose_engine_command_executes_with_runtime_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from smc_ict import cli
+
+    engine = YAML(typ="safe").load((ROOT / "compose.yaml").read_text(encoding="utf-8"))["services"][
+        "engine"
     ]
+    data_folder = tmp_path / "data"
+    config_folder = tmp_path / "config"
+    data_folder.mkdir()
+    config_folder.mkdir()
+    monkeypatch.setenv("DATA_FOLDER", str(data_folder))
+    monkeypatch.setenv("CONFIG_FOLDER", str(config_folder))
+    captured: dict[str, object] = {}
+
+    class SchedulerProbe:
+        def start(self) -> None:
+            captured["started"] = True
+
+        def health(self) -> SimpleNamespace:
+            return SimpleNamespace(configured_jobs=0, recovered_run_ids=())
+
+        def shutdown(self, *, wait: bool) -> None:
+            captured["shutdown_wait"] = wait
+
+    class NonBlockingEvent:
+        def wait(self) -> None:
+            captured["waited"] = True
+
+    def build_scheduler_probe(**kwargs: object) -> SchedulerProbe:
+        captured.update(kwargs)
+        return SchedulerProbe()
+
+    monkeypatch.setattr(cli, "build_scheduler", build_scheduler_probe)
+    monkeypatch.setattr(cli, "Event", NonBlockingEvent)
+
+    assert _run_cli(engine["command"]) == 0
+    assert captured == {
+        "schedule_path": "/config/schedule.yaml",
+        "database": data_folder / "smc_ict.db",
+        "lock_path": data_folder / "engine.lock",
+        "config_root": config_folder,
+        "started": True,
+        "waited": True,
+        "shutdown_wait": True,
+    }
+    assert [json.loads(line)["status"] for line in capsys.readouterr().out.splitlines()] == [
+        "READY",
+        "SHUTDOWN",
+    ]
+    assert not (data_folder / "scheduler.ready").exists()
+
+
+def test_compose_healthcheck_executes_against_data_folder_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    engine = YAML(typ="safe").load((ROOT / "compose.yaml").read_text(encoding="utf-8"))["services"][
+        "engine"
+    ]
+    data_folder = tmp_path / "data"
+    data_folder.mkdir()
+    monkeypatch.setenv("DATA_FOLDER", str(data_folder))
+    (data_folder / "scheduler.ready").write_text(
+        json.dumps({"pid": os.getpid(), "status": "READY"}), encoding="utf-8"
+    )
+    command = engine["healthcheck"]["test"]
+    assert command[:2] == ["CMD", "smc-ict"]
+
+    assert _run_cli(command[2:]) == 0
+    assert json.loads(capsys.readouterr().out) == {"pid": os.getpid(), "status": "READY"}
 
 
 def test_compose_avoids_the_legacy_nested_read_only_bind_mount_and_starts_a_fresh_probe(
@@ -242,9 +313,6 @@ def test_compose_avoids_the_legacy_nested_read_only_bind_mount_and_starts_a_fres
             "bind": {"create_host_path": False},
         },
     ]
-    assert engine["command"][0:2] == ["scheduler", "--schedule"]
-    assert engine["command"][-2:] == ["--config-root", "/"]
-
     host_fixture = _daemon_visible_project_fixture()
     host_config = host_fixture / "config"
     host_strategies = host_fixture / "strategies"

@@ -40,22 +40,17 @@ services:
     <<: *runtime
     secrets:
       - discord_webhook_url
+    environment:
+      CONFIG_FOLDER: /config
+      DATA_FOLDER: /data
     command:
       - scheduler
       - --schedule
       - /config/schedule.yaml
-      - --database
-      - /data/smc_ict.db
-      - --lock
-      - /data/engine.lock
-      - --health-file
-      - /data/scheduler.ready
-      - --config-root
-      - /
     restart: unless-stopped
     stop_grace_period: 30s
     healthcheck:
-      test: ["CMD", "smc-ict", "scheduler-health", "--health-file", "/data/scheduler.ready"]
+      test: ["CMD", "smc-ict", "scheduler-health"]
       interval: 10s
       timeout: 5s
       retries: 3
