@@ -810,9 +810,113 @@ def test_readme_documents_the_operator_workflows_and_safety_boundaries() -> None
 
     assert "The Compose health command reads the scheduler readiness marker" in readme
     assert "The Compose health command reads `/data/smc_ict.db`" not in readme
-    assert "--config-root config" in readme
-    assert "--config-root ." not in readme
+    assert 'export DATA_FOLDER="$(pwd)/data"' in readme
+    assert 'export CONFIG_FOLDER="$(pwd)/config"' in readme
     assert "./data" not in readme
+
+
+def test_documented_operator_commands_parse_with_global_runtime_authority() -> None:
+    from smc_ict.cli import _parser
+
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    operations = (ROOT / "docs/operations.md").read_text(encoding="utf-8")
+    operator_docs = "\n".join((readme, operations))
+
+    forbidden_operation_arguments = (
+        "database bootstrap --database",
+        "database status --database",
+        "--database /data/smc_ict.db",
+        "--lock /data/engine.lock",
+        "--config-root",
+        "--health-file",
+        "--market-data /config/market-data.yaml",
+    )
+    for forbidden_argument in forbidden_operation_arguments:
+        assert forbidden_argument not in operator_docs
+
+    expected_shapes = (
+        (
+            ["database", "bootstrap"],
+            {"command": "database", "database_command": "bootstrap"},
+        ),
+        (["database", "status"], {"command": "database", "database_command": "status"}),
+        (
+            [
+                "run",
+                "--strategy",
+                "strategies/source-aligned-research.yaml",
+                "--notifications",
+                "config/notifications.yaml",
+                "--trigger",
+                "manual",
+            ],
+            {
+                "command": "run",
+                "strategy": "strategies/source-aligned-research.yaml",
+                "notifications": "config/notifications.yaml",
+                "trigger": "manual",
+            },
+        ),
+        (
+            ["scheduler", "--schedule", "config/schedule.yaml"],
+            {"command": "scheduler", "schedule": "config/schedule.yaml"},
+        ),
+        (["scheduler-health"], {"command": "scheduler-health"}),
+        (
+            ["backtest", "backtests/source-aligned-research/one-year-baseline.yaml"],
+            {
+                "command": "backtest",
+                "scenario": "backtests/source-aligned-research/one-year-baseline.yaml",
+            },
+        ),
+        (
+            [
+                "run",
+                "--strategy",
+                "/strategies/source-aligned-research.yaml",
+                "--notifications",
+                "/config/notifications.yaml",
+                "--trigger",
+                "manual",
+            ],
+            {
+                "command": "run",
+                "strategy": "/strategies/source-aligned-research.yaml",
+                "notifications": "/config/notifications.yaml",
+                "trigger": "manual",
+            },
+        ),
+        (
+            ["backtest", "/backtests/source-aligned-research/one-year-baseline.yaml"],
+            {
+                "command": "backtest",
+                "scenario": "/backtests/source-aligned-research/one-year-baseline.yaml",
+            },
+        ),
+    )
+    parser = _parser()
+    for argv, expected in expected_shapes:
+        assert vars(parser.parse_args(argv)) == expected
+
+
+def test_documented_database_and_scheduler_health_commands_execute_from_data_folder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    data_folder = tmp_path / "data"
+    data_folder.mkdir()
+    monkeypatch.setenv("DATA_FOLDER", str(data_folder))
+
+    assert _run_cli(["database", "bootstrap"]) == 0
+    assert _run_cli(["database", "status"]) == 0
+    (data_folder / "scheduler.ready").write_text(
+        json.dumps({"pid": os.getpid(), "status": "READY"}), encoding="utf-8"
+    )
+    assert _run_cli(["scheduler-health"]) == 0
+
+    payloads = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert payloads[0] == {"schema_version": 1, "status": "READY", "tables": 5}
+    assert payloads[1]["runs"] == 0
+    assert payloads[2] == {"pid": os.getpid(), "status": "READY"}
 
 
 def test_operator_docs_cover_the_single_secret_release_workflow_and_runtime_evidence() -> None:
@@ -829,7 +933,7 @@ def test_operator_docs_cover_the_single_secret_release_workflow_and_runtime_evid
         "docker compose up -d engine",
         "docker compose ps",
         "docker compose logs --tail 100 engine",
-        'smc-ict database status --database "$DATA_FOLDER/smc_ict.db"',
+        "smc-ict database status",
         "docker compose --profile manual run --rm manual run",
         "docker compose down",
     ):

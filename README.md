@@ -53,7 +53,7 @@ Read readiness and logs:
 
 ```sh
 docker compose ps
-uv run smc-ict database status --database "$DATA_FOLDER/smc_ict.db"
+uv run smc-ict database status
 docker compose logs --follow engine
 ```
 
@@ -88,9 +88,16 @@ Validation checks YAML structure, types, provider IDs, schedule policy, notifica
 Bootstrap or inspect a local database:
 
 ```sh
-uv run smc-ict database bootstrap --database "$DATA_FOLDER/smc_ict.db"
-uv run smc-ict database status --database "$DATA_FOLDER/smc_ict.db"
+export DATA_FOLDER="$(pwd)/data"
+export CONFIG_FOLDER="$(pwd)/config"
+uv run smc-ict database bootstrap
+uv run smc-ict database status
 ```
+
+Host commands derive `smc_ict.db`, `engine.lock`, and `scheduler.ready` only from
+`DATA_FOLDER`; commands that compose runtime services derive their configuration root only from
+`CONFIG_FOLDER`. Both roots must be normalized absolute paths. Operation-level path overrides are
+intentionally rejected.
 
 The notifier dry test validates a bounded event payload without a delivery attempt:
 
@@ -111,10 +118,10 @@ export CONFIG_FOLDER="$(pwd)/config"
 uv run smc-ict run \
   --strategy strategies/source-aligned-research.yaml \
   --notifications config/notifications.yaml \
-  --database "$DATA_FOLDER/smc_ict.db" \
-  --lock "$DATA_FOLDER/engine.lock" \
   --trigger manual
 ```
+
+The run loads market-data configuration from `${CONFIG_FOLDER}/market-data.yaml`.
 
 The checked-in source-aligned strategy executes seven Python plugins over completed candles. Warm-up gaps produce `UNAVAILABLE`; fully evaluable gates that are not satisfied produce `NO_TRADE`. A `READY` result remains research evidence, not an order instruction.
 
@@ -166,11 +173,17 @@ docker compose start engine
 Start the scheduler outside Compose only for local diagnosis:
 
 ```sh
+export DATA_FOLDER="$(pwd)/data"
+export CONFIG_FOLDER="$(pwd)/config"
 uv run smc-ict scheduler \
-  --schedule config/schedule.yaml \
-  --database "$DATA_FOLDER/smc_ict.db" \
-  --lock "$DATA_FOLDER/engine.lock" \
-  --config-root config
+  --schedule config/schedule.yaml
+```
+
+While that scheduler is running, read its readiness marker from another shell with the same
+`DATA_FOLDER`:
+
+```sh
+uv run smc-ict scheduler-health
 ```
 
 ## Strategy DAG authoring
