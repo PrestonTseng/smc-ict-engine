@@ -178,7 +178,7 @@ def run(*, count: int, output_root: Path) -> dict[str, object]:
     }
     return {
         "schema_version": 1,
-        "benchmark_kind": "deterministic synthetic replay-shaped chunked report",
+        "benchmark_kind": "deterministic synthetic replay-shaped directly addressable report",
         "evaluation_count": count,
         "instrument_count": len(INSTRUMENTS),
         "execution_interval_minutes": 5,

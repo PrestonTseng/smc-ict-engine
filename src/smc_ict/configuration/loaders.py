@@ -196,9 +196,7 @@ def load_strategy(path: str | Path, *, allow_deferred: bool = False) -> Strategy
 
 def _utc_minute(value: object, field: str) -> int:
     text = exact_str(value, field)
-    match = re.fullmatch(
-        r"([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):00Z", text
-    )
+    match = re.fullmatch(r"([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):00Z", text)
     if match is None:
         fail(field, "expected a canonical UTC minute timestamp")
     try:
@@ -258,9 +256,7 @@ def load_backtest_text(text: str) -> BacktestScenarioConfig:
         "backtest.execution",
         {"maximum_holding_minutes", "intrabar_conflict", "allow_same_minute_target"},
     )
-    conflict = exact_str(
-        execution_raw["intrabar_conflict"], "backtest.execution.intrabar_conflict"
-    )
+    conflict = exact_str(execution_raw["intrabar_conflict"], "backtest.execution.intrabar_conflict")
     if conflict != "stop_first":
         fail("backtest.execution.intrabar_conflict", "only stop_first is allowed in v1")
     same_minute = exact_bool(

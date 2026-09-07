@@ -59,6 +59,18 @@ def _write_encoded_chunks(handle: BinaryIO, rows: Iterable[object]) -> int:
     return count
 
 
+def _write_encoded_records(handle: BinaryIO, rows: Iterable[object]) -> int:
+    handle.write(b"[")
+    separator = b""
+    count = 0
+    for row in rows:
+        handle.write(separator + b'"' + _gzip_base64(row) + b'"')
+        separator = b","
+        count += 1
+    handle.write(b"]")
+    return count
+
+
 def write_report(
     handle: BinaryIO,
     *,
@@ -92,7 +104,7 @@ body{{font:14px system-ui,sans-serif;margin:2rem;color:#172033}} section{{margin
 <div id="traces"></div><div class="pager"><button id="trace-first" type="button">First</button><button id="trace-prev" type="button">Previous</button><span id="trace-page"></span><label>Page <input id="trace-page-input" type="number" min="1" value="1"></label><button id="trace-go" type="button">Go</button><button id="trace-next" type="button">Next</button><button id="trace-last" type="button">Last</button></div></section>
 <script id="backtest-evidence" type="application/json" nonce="backtest-report">"""
     handle.write(prefix.encode("utf-8"))
-    handle.write(b'{"compression":"gzip","schema_version":2,"page_size":25')
+    handle.write(b'{"compression":"gzip","schema_version":3,"page_size":25')
     handle.write(b',"manifest":"' + _gzip_base64(manifest) + b'"')
     handle.write(b',"summary":"' + _gzip_base64(summary) + b'"')
 
@@ -118,8 +130,8 @@ body{{font:14px system-ui,sans-serif;margin:2rem;color:#172033}} section{{margin
                 str(decision.get("evaluation_time_ms", trace.get("evaluation_time_ms", ""))),
             ]
 
-    handle.write(b',"evaluation_chunks":')
-    evaluation_count = _write_encoded_chunks(handle, evaluation_rows())
+    handle.write(b',"evaluation_records":')
+    evaluation_count = _write_encoded_records(handle, evaluation_rows())
     handle.write(b',"evaluation_count":' + str(evaluation_count).encode("ascii"))
     handle.write(b',"evaluation_index_chunks":')
     index_count = _write_encoded_chunks(handle, evaluation_index_rows())
@@ -131,7 +143,7 @@ body{{font:14px system-ui,sans-serif;margin:2rem;color:#172033}} section{{margin
     handle.write(b"}")
 
     suffix = f"""</script><script nonce="backtest-report">
-'use strict';const store=JSON.parse(document.getElementById('backtest-evidence').textContent);const PAGE_SIZE={_PAGE_SIZE};const pages={{trade:0,decision:0,trace:0}};let summary,traceMatchCount=store.evaluation_count;
+'use strict';const store=JSON.parse(document.getElementById('backtest-evidence').textContent);const PAGE_SIZE={_PAGE_SIZE};const pages={{trade:0,decision:0,trace:0}},evaluationCache=new Map();let summary,traceMatchCount=store.evaluation_count;
 const esc=v=>String(v??'').replace(/[&<>\"']/g,c=>({{'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}}[c]));
 const display=v=>Array.isArray(v)?v.map(item=>Array.isArray(item)?item.join(': '):item).join(', '):v;
 const table=(headers,rows)=>`<table><thead><tr>${{headers.map(value=>`<th>${{esc(value)}}</th>`).join('')}}</tr></thead><tbody>${{rows.map(row=>`<tr>${{row.map(value=>`<td>${{esc(display(value))}}</td>`).join('')}}</tr>`).join('')}}</tbody></table>`;
@@ -140,13 +152,14 @@ function renderMetrics(id,title,groups){{if(!groups.length){{document.getElement
 function pageCount(count){{return Math.max(1,Math.ceil(count/PAGE_SIZE));}}function bound(kind,count){{pages[kind]=Math.max(0,Math.min(pages[kind],pageCount(count)-1));}}
 function updatePager(kind,count){{bound(kind,count);const pagesCount=pageCount(count);document.getElementById(`${{kind}}-page`).textContent=`Page ${{pages[kind]+1}} of ${{pagesCount}} · ${{count}} records`;document.getElementById(`${{kind}}-prev`).disabled=pages[kind]===0;document.getElementById(`${{kind}}-next`).disabled=pages[kind]===pagesCount-1;if(kind==='trace'){{const input=document.getElementById('trace-page-input');input.max=String(pagesCount);input.value=String(pages.trace+1);}}}}
 async function chunkRows(chunks,indexes){{const decoded=new Map();for(const index of indexes){{const chunk=Math.floor(index/PAGE_SIZE);if(!decoded.has(chunk))decoded.set(chunk,await gunzip(chunks[chunk]));}}return indexes.map(index=>decoded.get(Math.floor(index/PAGE_SIZE))[index%PAGE_SIZE]);}}
+async function evaluationRows(indexes){{const selected=new Set(indexes);for(const index of indexes){{if(!evaluationCache.has(index))evaluationCache.set(index,gunzip(store.evaluation_records[index]));}}const rows=await Promise.all(indexes.map(index=>evaluationCache.get(index)));for(const index of evaluationCache.keys()){{if(!selected.has(index))evaluationCache.delete(index);}}return rows;}}
 function pageRange(kind,count){{bound(kind,count);const start=pages[kind]*PAGE_SIZE,indexes=[];for(let index=start;index<Math.min(start+PAGE_SIZE,count);index++)indexes.push(index);return indexes;}}
 function renderSummary(){{renderMetrics('overall-summary','Overall summary',[['Overall',summary.overall]]);renderMetrics('instrument-summary','By instrument',summary.by_instrument);renderMetrics('direction-summary','By direction',summary.by_direction);}}
 async function renderTrades(){{const count=store.trade_count;const indexes=pageRange('trade',count);const visible=await chunkRows(store.trade_chunks,indexes);document.getElementById('trade-counts').innerHTML=`<h3>Status</h3>${{table(['Status','Count'],summary.overall.status_counts)}}<h3>Exit reason</h3>${{table(['Reason','Count'],summary.overall.exit_reason_counts)}}`;document.getElementById('trade-table').innerHTML=visible.length?table(['Instrument','Direction','Status','Signal time','Exit reason','Net R'],visible.map(t=>[t.instrument_id,t.direction,t.status,t.signal_time_ms,t.exit_reason,t.net_r])):'<p>No trades.</p>';updatePager('trade',count);}}
-async function renderDecisions(){{const indexes=pageRange('decision',store.evaluation_count);const visible=await chunkRows(store.evaluation_chunks,indexes);document.getElementById('decision-counts').innerHTML=`<h3>Disposition</h3>${{table(['Disposition','Count'],summary.decision_status_counts)}}<h3>Unavailable reason</h3>${{table(['Reason','Count'],summary.unavailable_reason_counts)}}`;document.getElementById('decision-table').innerHTML=visible.length?table(['Instrument','Evaluation time','Disposition','Direction','First failed signal'],visible.map(item=>{{const row=item.decision;return [row.instrument_id,row.evaluation_time_ms,row.decision.status,row.decision.direction,row.decision.first_failed_signal];}})):'<p>No decisions.</p>';updatePager('decision',store.evaluation_count);}}
+async function renderDecisions(){{const indexes=pageRange('decision',store.evaluation_count);const visible=await evaluationRows(indexes);document.getElementById('decision-counts').innerHTML=`<h3>Disposition</h3>${{table(['Disposition','Count'],summary.decision_status_counts)}}<h3>Unavailable reason</h3>${{table(['Reason','Count'],summary.unavailable_reason_counts)}}`;document.getElementById('decision-table').innerHTML=visible.length?table(['Instrument','Evaluation time','Disposition','Direction','First failed signal'],visible.map(item=>{{const row=item.decision;return [row.instrument_id,row.evaluation_time_ms,row.decision.status,row.decision.direction,row.decision.first_failed_signal];}})):'<p>No decisions.</p>';updatePager('decision',store.evaluation_count);}}
 function value(id){{return document.getElementById(id).value.toLowerCase();}}function hasFilters(){{return ['instrument-filter','direction-filter','evaluation-filter','status-filter','failed-step-filter','reason-filter'].some(id=>value(id));}}function matcher(){{const instrument=value('instrument-filter'),direction=value('direction-filter'),evaluation=value('evaluation-filter'),status=value('status-filter'),failed=value('failed-step-filter'),reason=value('reason-filter');return row=>(!instrument||row[0].toLowerCase().includes(instrument))&&(!direction||row[1].toLowerCase()===direction)&&(!status||row[2].toLowerCase()===status)&&(!failed||row[3].toLowerCase().includes(failed))&&(!reason||row[4].toLowerCase().includes(reason))&&(!evaluation||row[5].includes(evaluation));}}
 async function matchingPageAndCount(){{if(!hasFilters())return {{count:store.evaluation_count,indexes:pageRange('trace',store.evaluation_count)}};const include=matcher(),requestedPage=Math.max(0,pages.trace),start=Math.max(0,pages.trace)*PAGE_SIZE,selected=[],last=[];let count=0,index=0;for(const encoded of store.evaluation_index_chunks){{const chunk=await gunzip(encoded);for(const row of chunk){{if(include(row)){{if(count>=start&&count<start+PAGE_SIZE)selected.push(index);last.push(index);if(last.length>PAGE_SIZE)last.shift();count++;}}index++;}}}}bound('trace',count);return {{count,indexes:pages.trace===requestedPage?selected:last}};}}
-async function renderTraces(){{const match=await matchingPageAndCount();traceMatchCount=match.count;const visible=await chunkRows(store.evaluation_chunks,match.indexes);document.getElementById('traces').innerHTML=visible.map(item=>{{const t=item.trace,d=item.decision.decision;return `<details><summary>${{esc(t.instrument_id)}} · ${{esc(t.evaluation_time_ms)}} · ${{esc(d.status)}} · ${{esc(d.direction)}} · first rejection: ${{esc(t.first_rejection||'none')}}</summary>${{t.steps.map(s=>`<div class="step"><strong>${{esc(s.kind)}} / ${{esc(s.step_id)}}</strong>: ${{esc(s.state)}} — ${{esc(s.reason)}}</div>`).join('')}}</details>`;}}).join('')||'<p>No matching evaluations.</p>';updatePager('trace',match.count);}}
+async function renderTraces(){{const match=await matchingPageAndCount();traceMatchCount=match.count;const visible=await evaluationRows(match.indexes);document.getElementById('traces').innerHTML=visible.map(item=>{{const t=item.trace,d=item.decision.decision;return `<details><summary>${{esc(t.instrument_id)}} · ${{esc(t.evaluation_time_ms)}} · ${{esc(d.status)}} · ${{esc(d.direction)}} · first rejection: ${{esc(t.first_rejection||'none')}}</summary>${{t.steps.map(s=>`<div class="step"><strong>${{esc(s.kind)}} / ${{esc(s.step_id)}}</strong>: ${{esc(s.state)}} — ${{esc(s.reason)}}</div>`).join('')}}</details>`;}}).join('')||'<p>No matching evaluations.</p>';updatePager('trace',match.count);}}
 function move(kind,delta,render){{pages[kind]+=delta;void render();}}function lastTrace(){{pages.trace=pageCount(traceMatchCount)-1;void renderTraces();}}function jumpTrace(){{pages.trace=Number(document.getElementById('trace-page-input').value)-1;void renderTraces();}}
 async function init(){{if(typeof DecompressionStream==='undefined'){{document.getElementById('compatibility').hidden=false;return;}}try{{summary=await gunzip(store.summary);renderSummary();await Promise.all([renderTrades(),renderDecisions(),renderTraces()]);document.documentElement.dataset.reportReady='true';}}catch(error){{document.getElementById('compatibility').hidden=false;document.getElementById('compatibility').textContent='Embedded backtest evidence could not be decompressed; no partial evidence is shown.';console.error(error);}}}}
 for(const id of ['instrument-filter','evaluation-filter','failed-step-filter','reason-filter']){{document.getElementById(id).addEventListener('input',()=>{{pages.trace=0;void renderTraces();}});}}for(const id of ['status-filter','direction-filter']){{document.getElementById(id).addEventListener('change',()=>{{pages.trace=0;void renderTraces();}});}}

@@ -35,12 +35,11 @@ x-runtime: &runtime
       read_only: true
       bind:
         create_host_path: false
-  secrets:
-    - discord_webhook_url
-
 services:
   engine:
     <<: *runtime
+    secrets:
+      - discord_webhook_url
     command:
       - scheduler
       - --schedule

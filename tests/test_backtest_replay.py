@@ -106,15 +106,23 @@ class RecordingPlugin:
 
 def strategy(signals: tuple[SignalConfig, ...] | None = None) -> StrategyConfig:
     configured = signals or (
-        SignalConfig("levels", "execution", (), frozen_mapping({}), True, "LEVELS", 1),
+        SignalConfig.model_construct(
+            id="levels",
+            role="execution",
+            depends_on=(),
+            parameters=frozen_mapping({}),
+            required=True,
+            effect="LEVELS",
+            order=1,
+        ),
     )
-    return StrategyConfig(
-        "fixture",
-        "1",
-        ("BTC-USDT-PERP",),
-        5,
-        frozen_mapping({"execution": "5m"}),
-        configured,
+    return StrategyConfig.model_construct(
+        name="fixture",
+        version="1",
+        instruments=("BTC-USDT-PERP",),
+        history_minutes=5,
+        roles=frozen_mapping({"execution": "5m"}),
+        signals=configured,
     )
 
 
@@ -161,7 +169,15 @@ def test_trace_covers_every_indicator_and_gate_and_preserves_first_rejection() -
     from smc_ict.application.backtesting import PointInTimeReplay
 
     signals = tuple(
-        SignalConfig(signal_id, "execution", (), frozen_mapping({}), True, "REJECT", order)
+        SignalConfig.model_construct(
+            id=signal_id,
+            role="execution",
+            depends_on=(),
+            parameters=frozen_mapping({}),
+            required=True,
+            effect="REJECT",
+            order=order,
+        )
         for order, signal_id in enumerate(("a", "b", "c"), start=1)
     )
     statuses = {"a": "PASS", "b": "FAIL", "c": "PASS"}
@@ -225,7 +241,17 @@ def test_backtest_identity_hashes_every_immutable_input() -> None:
 def test_trace_uses_the_ordered_policy_unavailable_result_for_missing_levels() -> None:
     from smc_ict.application.backtesting import PointInTimeReplay
 
-    signals = (SignalConfig("a", "execution", (), frozen_mapping({}), True, "LEVELS", 1),)
+    signals = (
+        SignalConfig.model_construct(
+            id="a",
+            role="execution",
+            depends_on=(),
+            parameters=frozen_mapping({}),
+            required=True,
+            effect="LEVELS",
+            order=1,
+        ),
+    )
     replay = PointInTimeReplay(
         strategy=strategy(signals),
         provider_id="okx_swap",

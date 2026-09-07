@@ -29,11 +29,16 @@ def _assert_render_bound(page: Any) -> int:
     return count
 
 
-def _timed_action(page: Any, action: Callable[[], object]) -> float:
+def _timed_action(page: Any, action: Callable[[], object]) -> tuple[float, int]:
+    page.evaluate("window.__decodedEvaluationCount = 0")
     started = time.perf_counter()
     action()
     page.evaluate("async () => await renderTraces()")
-    return time.perf_counter() - started
+    elapsed = time.perf_counter() - started
+    decoded = int(page.evaluate("window.__decodedEvaluationCount"))
+    if decoded > PAGE_SIZE:
+        raise RuntimeError(f"decoded evaluation bound exceeded: {decoded}")
+    return elapsed, decoded
 
 
 def probe(report: Path, *, chromium_executable: Path | None = None) -> dict[str, object]:
@@ -53,6 +58,25 @@ def probe(report: Path, *, chromium_executable: Path | None = None) -> dict[str,
             executable_path=str(chromium_executable) if chromium_executable else None,
         )
         page = browser.new_page()
+        page.add_init_script(
+            """
+            window.__decodedEvaluationCount = 0;
+            const originalJsonParse = JSON.parse;
+            JSON.parse = function (...args) {
+              const value = originalJsonParse.apply(this, args);
+              if (value && !Array.isArray(value) && value.decision && value.trace) {
+                window.__decodedEvaluationCount += 1;
+              } else if (
+                Array.isArray(value) &&
+                value.length &&
+                value.every(item => item && item.decision && item.trace)
+              ) {
+                window.__decodedEvaluationCount += value.length;
+              }
+              return value;
+            };
+            """
+        )
         page.on(
             "console",
             lambda message: console_errors.append(message.text)
@@ -74,10 +98,15 @@ def probe(report: Path, *, chromium_executable: Path | None = None) -> dict[str,
         total_pages = (total + PAGE_SIZE - 1) // PAGE_SIZE
         element_counts = {"initial": page.locator("*").count()}
         rendered_counts = {"initial": _assert_render_bound(page)}
+        decoded_counts = {"initial": int(page.evaluate("window.__decodedEvaluationCount"))}
+        if decoded_counts["initial"] > PAGE_SIZE:
+            raise RuntimeError(
+                f"initial decoded evaluation bound exceeded: {decoded_counts['initial']}"
+            )
         access: dict[str, str] = {"first": page.locator("#traces summary").first.inner_text()}
 
         middle_page = (total_pages + 1) // 2
-        timings["middle_page"] = _timed_action(
+        timings["middle_page"], decoded_counts["middle"] = _timed_action(
             page,
             lambda: (
                 page.locator("#trace-page-input").fill(str(middle_page)),
@@ -87,11 +116,13 @@ def probe(report: Path, *, chromium_executable: Path | None = None) -> dict[str,
         access["middle"] = page.locator("#traces summary").first.inner_text()
         rendered_counts["middle"] = _assert_render_bound(page)
 
-        timings["last_page"] = _timed_action(page, lambda: page.locator("#trace-last").click())
+        timings["last_page"], decoded_counts["last"] = _timed_action(
+            page, lambda: page.locator("#trace-last").click()
+        )
         access["last"] = page.locator("#traces summary").last.inner_text()
         rendered_counts["last"] = _assert_render_bound(page)
 
-        timings["upper_clamp"] = _timed_action(
+        timings["upper_clamp"], decoded_counts["upper_clamp"] = _timed_action(
             page,
             lambda: (
                 page.locator("#trace-page-input").fill(str(total_pages + 100)),
@@ -102,16 +133,17 @@ def probe(report: Path, *, chromium_executable: Path | None = None) -> dict[str,
             raise RuntimeError("upper page navigation did not clamp")
 
         def clear_filters() -> None:
-            for selector in (
-                "#instrument-filter",
-                "#evaluation-filter",
-                "#failed-step-filter",
-                "#reason-filter",
-            ):
-                page.locator(selector).fill("")
-            page.locator("#direction-filter").select_option("")
-            page.locator("#status-filter").select_option("")
-            page.evaluate("async () => { pages.trace=0; await renderTraces(); }")
+            page.evaluate(
+                """async () => {
+                  for (const id of [
+                    'instrument-filter', 'evaluation-filter', 'failed-step-filter', 'reason-filter'
+                  ]) document.getElementById(id).value = '';
+                  document.getElementById('direction-filter').value = '';
+                  document.getElementById('status-filter').value = '';
+                  pages.trace = 0;
+                  await renderTraces();
+                }"""
+            )
 
         filters: dict[str, int] = {}
         filter_actions: tuple[tuple[str, Callable[[], None]], ...] = (
@@ -126,20 +158,23 @@ def probe(report: Path, *, chromium_executable: Path | None = None) -> dict[str,
         )
         for name, action in filter_actions:
             clear_filters()
-            timings[f"filter_{name}"] = _timed_action(page, action)
+            timings[f"filter_{name}"], decoded_counts[f"filter_{name}"] = _timed_action(
+                page, action
+            )
             filters[name] = _record_count(page)
             if filters[name] < 1:
                 raise RuntimeError(f"{name} filter exposed no evaluations")
-            _assert_render_bound(page)
+            rendered_counts[f"filter_{name}"] = _assert_render_bound(page)
 
         clear_filters()
         first_evaluation = access["first"].split(" · ")[1]
-        timings["filter_evaluation"] = _timed_action(
+        timings["filter_evaluation"], decoded_counts["filter_evaluation"] = _timed_action(
             page, lambda: page.locator("#evaluation-filter").fill(first_evaluation)
         )
         filters["evaluation"] = _record_count(page)
         if filters["evaluation"] < 1:
             raise RuntimeError("evaluation filter exposed no evaluations")
+        rendered_counts["filter_evaluation"] = _assert_render_bound(page)
 
         clear_filters()
         filters["clear"] = _record_count(page)
@@ -149,6 +184,8 @@ def probe(report: Path, *, chromium_executable: Path | None = None) -> dict[str,
         element_counts["maximum_observed"] = max(
             element_counts["initial"], page.locator("*").count()
         )
+        if page.locator("#backtest-evidence").count() != payload_nodes:
+            raise RuntimeError("embedded payload node count changed during interaction")
         browser.close()
 
     if console_errors:
@@ -164,6 +201,7 @@ def probe(report: Path, *, chromium_executable: Path | None = None) -> dict[str,
         "payload_node_count": payload_nodes,
         "compatibility_message_hidden": compatibility_hidden,
         "rendered_evaluation_counts": rendered_counts,
+        "decoded_evaluation_counts": decoded_counts,
         "element_counts": element_counts,
         "access": access,
         "filters": filters,

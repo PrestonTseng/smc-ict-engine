@@ -124,7 +124,7 @@ def _html_evidence(path: Path) -> dict[str, object]:
     def decode(encoded: str) -> Any:
         return json.loads(zlib.decompress(base64.b64decode(encoded), wbits=31))
 
-    evaluations = [item for encoded in store["evaluation_chunks"] for item in decode(encoded)]
+    evaluations = [decode(encoded) for encoded in store["evaluation_records"]]
     return {
         "manifest": decode(store["manifest"]),
         "summary": decode(store["summary"]),
@@ -572,7 +572,7 @@ def test_html_bounds_trace_dom_and_exposes_filter_and_page_boundaries(tmp_path: 
     assert "pages.trace=Number(document.getElementById('trace-page-input').value)-1" in html
 
 
-def test_html_uses_deterministic_compressed_chunks_with_at_most_25_evaluations(
+def test_html_uses_deterministic_directly_addressable_evaluation_records(
     tmp_path: Path,
 ) -> None:
     from smc_ict.adapters.reporting.html import render_report
@@ -618,15 +618,15 @@ def test_html_uses_deterministic_compressed_chunks_with_at_most_25_evaluations(
     assert first == second
     marker = b'<script id="backtest-evidence" type="application/json" nonce="backtest-report">'
     payload = json.loads(first.split(marker, 1)[1].split(b"</script>", 1)[0])
-    assert payload["schema_version"] == 2
+    assert payload["schema_version"] == 3
     assert payload["compression"] == "gzip"
-    assert len(payload["evaluation_chunks"]) == 3
-    decoded_chunks = [
-        json.loads(zlib.decompress(base64.b64decode(chunk), wbits=31))
-        for chunk in payload["evaluation_chunks"]
+    assert len(payload["evaluation_records"]) == count
+    decoded_records = [
+        json.loads(zlib.decompress(base64.b64decode(record), wbits=31))
+        for record in payload["evaluation_records"]
     ]
-    assert [len(chunk) for chunk in decoded_chunks] == [25, 25, 3]
-    assert [item["decision"] for chunk in decoded_chunks for item in chunk] == decisions
-    assert [item["trace"] for chunk in decoded_chunks for item in chunk] == traces
+    assert [item["decision"] for item in decoded_records] == decisions
+    assert [item["trace"] for item in decoded_records] == traces
+    assert "evaluation_chunks" not in payload
     assert "DecompressionStream" in first.decode("utf-8")
     assert "This browser cannot decompress the embedded backtest evidence" in first.decode("utf-8")

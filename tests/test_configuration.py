@@ -392,6 +392,7 @@ def test_schedule_accepts_only_utc_strict_bounds_paths_and_cron() -> None:
         with pytest.raises(a["StrictConfigurationError"]):
             a["load_schedule_text"](SCHEDULE.replace(old, new))
 
+
 @pytest.mark.parametrize(
     "strategy_path",
     ["/config/strategy.yaml", "/strategies/strategy.yml"],

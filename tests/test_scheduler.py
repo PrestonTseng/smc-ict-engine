@@ -632,6 +632,7 @@ def test_scheduler_applies_utc_misfire_overlap_coalescing_recovery_and_shutdown(
                 id="fixture-job",
                 cron="*/5 * * * *",
                 strategy="/strategies/strategy.yaml",
+                market_data="/config/market-data.yaml",
                 notifications="/config/notifications.yaml",
                 misfire_policy="skip",
                 misfire_grace_seconds=17,
@@ -686,6 +687,7 @@ def test_scheduler_honors_configured_startup_delay_for_first_fire() -> None:
                 id="delayed-job",
                 cron="* * * * *",
                 strategy="/strategies/strategy.yaml",
+                market_data="/config/market-data.yaml",
                 notifications="/config/notifications.yaml",
                 misfire_policy="skip",
                 misfire_grace_seconds=10,
@@ -732,6 +734,7 @@ def test_scheduler_build_validates_every_referenced_job_authority_before_readine
     - id: broken
       cron: "* * * * *"
       strategy: /strategies/missing-strategy.yaml
+      market_data: /config/market-data.yaml
       notifications: /config/missing-notifications.yaml
       misfire_policy: skip
       misfire_grace_seconds: 10
@@ -770,6 +773,7 @@ def test_scheduler_build_loads_only_the_global_market_data_authority(tmp_path, m
     - id: global-market
       cron: "* * * * *"
       strategy: /strategies/strategy.yaml
+      market_data: /config/market-data.yaml
       notifications: /config/notifications.yaml
       misfire_policy: skip
       misfire_grace_seconds: 10
@@ -834,6 +838,7 @@ def test_scheduler_shutdown_stops_and_drains_an_active_owned_operation() -> None
                 id="owned-child",
                 cron="* * * * *",
                 strategy="/strategies/strategy.yaml",
+                market_data="/config/market-data.yaml",
                 notifications="/config/notifications.yaml",
                 misfire_policy="skip",
                 misfire_grace_seconds=10,
@@ -925,6 +930,7 @@ def test_timed_out_child_is_terminated_killed_drained_and_durably_reconciled(
         id="timeout",
         cron="* * * * *",
         strategy="/strategies/strategy.yaml",
+        market_data="/config/market-data.yaml",
         notifications="/config/notifications.yaml",
         misfire_policy="skip",
         misfire_grace_seconds=10,

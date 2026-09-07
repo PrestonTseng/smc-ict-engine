@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -44,3 +45,51 @@ def test_browser_probe_exposes_a_dependency_free_help_path() -> None:
     assert completed.returncode == 0, completed.stderr
     assert "report.html" in completed.stdout
     assert "--chromium-executable" in completed.stdout
+
+
+def test_browser_probe_bounds_sparse_filter_evaluation_decoding(tmp_path: Path) -> None:
+    result_path = tmp_path / "benchmark.json"
+    generated = subprocess.run(
+        [
+            sys.executable,
+            "scripts/benchmark_backtest_report.py",
+            "--evaluations",
+            "103",
+            "--output-root",
+            str(tmp_path / "reports"),
+            "--result-json",
+            str(result_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert generated.returncode == 0, generated.stderr
+    benchmark = json.loads(result_path.read_text(encoding="utf-8"))
+    browser_path = tmp_path / "browser.json"
+    env = {**os.environ, "UV_NO_NETWORK": "1"}
+
+    probed = subprocess.run(
+        [
+            "uvx",
+            "--from",
+            "playwright",
+            "python",
+            "scripts/probe_backtest_report.py",
+            str(Path(benchmark["result_path"]) / "report.html"),
+            "--result-json",
+            str(browser_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert probed.returncode == 0, probed.stderr
+    browser = json.loads(browser_path.read_text(encoding="utf-8"))
+    assert browser["payload_node_count"] == 1
+    assert max(browser["rendered_evaluation_counts"].values()) <= 25
+    assert max(browser["decoded_evaluation_counts"].values()) <= 25
+    assert 0 < browser["decoded_evaluation_counts"]["filter_instrument"] <= 25
+    assert 0 < browser["decoded_evaluation_counts"]["filter_reason"] <= 25

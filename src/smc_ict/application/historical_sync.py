@@ -35,6 +35,46 @@ class HistoricalCandleRepository(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
+class _HistoricalSyncRepositoryAdapter:
+    """Let an explicit historical repair use rows, not forward-sync receipts, as authority."""
+
+    repository: HistoricalCandleRepository
+
+    def store_candle_page(
+        self,
+        candles: Sequence[ClosedCandle],
+        *,
+        successful_sync_ms: int,
+        required_start_open_ms: int,
+    ) -> None:
+        self.repository.store_candle_page(
+            candles,
+            successful_sync_ms=successful_sync_ms,
+            required_start_open_ms=required_start_open_ms,
+        )
+
+    def load_candles(
+        self,
+        provider_id: str,
+        market_type: str,
+        instrument_id: str,
+        start_open_ms: int,
+        end_open_ms: int,
+    ) -> tuple[ClosedCandle, ...]:
+        return self.repository.load_candles(
+            provider_id,
+            market_type,
+            instrument_id,
+            start_open_ms,
+            end_open_ms,
+        )
+
+    def load_sync_state(self, provider_id: str, market_type: str, instrument_id: str) -> None:
+        del provider_id, market_type, instrument_id
+        return None
+
+
+@dataclass(frozen=True, slots=True)
 class InstrumentSyncResult:
     candles: tuple[ClosedCandle, ...]
     existing_rows: int
@@ -97,9 +137,16 @@ class HistoricalRangeSyncService:
         for missing_start, missing_end in self._missing_ranges(
             existing, start_open_time_ms, end_open_time_ms
         ):
-            MarketSyncService(self._provider, self._repository).sync_range(
-                mapping, missing_start, missing_end
-            )
+            try:
+                MarketSyncService(
+                    self._provider, _HistoricalSyncRepositoryAdapter(self._repository)
+                ).sync_range(mapping, missing_start, missing_end)
+            except ValueError as error:
+                if str(error) != "completed provider range is not contiguous":
+                    raise
+                raise ValueError(
+                    "historical range is not contiguous after synchronization"
+                ) from error
         complete = self._load(mapping, start_open_time_ms, end_open_time_ms)
         expected_rows = (end_open_time_ms - start_open_time_ms) // _MINUTE_MS + 1
         if len(complete) != expected_rows or any(

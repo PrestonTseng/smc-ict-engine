@@ -135,7 +135,7 @@ The command synchronizes the requested period plus strategy warm-up under the sh
 - `decisions.jsonl` and `pipeline-traces.jsonl` preserve every ordered evaluation, pass/reject/unavailable reason, and first rejection.
 - `trades.jsonl` contains normalized, one-unit simulated outcomes without account sizing.
 - `summary.json` contains overall, instrument, direction, disposition, and unavailable-reason metrics.
-- `report.html` embeds deterministic gzip chunks of at most 25 canonical evaluations, plus a compact filter index, for lazy local filtering and expansion with no CDN or network dependency. Browsers without the standard `DecompressionStream` gzip primitive show an explicit compatibility failure instead of partial evidence.
+- `report.html` embeds each canonical evaluation as a deterministic directly addressable gzip record, plus a compact chunked filter index, so each page decompresses at most its 25 selected evaluations with no CDN or network dependency. Browsers without the standard `DecompressionStream` gzip primitive show an explicit compatibility failure instead of partial evidence.
 
 An identical rerun verifies and reuses byte-identical output. If any existing artifact differs, the command fails without overwriting it. A failure before publication leaves no partial result directory and never writes backtest rows to the five production tables.
 
