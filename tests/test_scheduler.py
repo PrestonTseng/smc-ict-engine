@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import sqlite3
 import subprocess
+import sys
 from datetime import UTC, datetime, timedelta
 from logging import LogRecord
 from pathlib import Path
 from threading import Event, Thread
+from typing import ClassVar
 
 import pytest
 
@@ -629,8 +631,8 @@ def test_scheduler_applies_utc_misfire_overlap_coalescing_recovery_and_shutdown(
             ScheduleJob(
                 id="fixture-job",
                 cron="*/5 * * * *",
-                strategy="/config/strategy.yaml",
-                market_data="/config/market.yaml",
+                strategy="/strategies/strategy.yaml",
+                market_data="/config/market-data.yaml",
                 notifications="/config/notifications.yaml",
                 misfire_policy="skip",
                 misfire_grace_seconds=17,
@@ -684,8 +686,8 @@ def test_scheduler_honors_configured_startup_delay_for_first_fire() -> None:
             ScheduleJob(
                 id="delayed-job",
                 cron="* * * * *",
-                strategy="/config/strategy.yaml",
-                market_data="/config/market.yaml",
+                strategy="/strategies/strategy.yaml",
+                market_data="/config/market-data.yaml",
                 notifications="/config/notifications.yaml",
                 misfire_policy="skip",
                 misfire_grace_seconds=10,
@@ -731,8 +733,8 @@ def test_scheduler_build_validates_every_referenced_job_authority_before_readine
   jobs:
     - id: broken
       cron: "* * * * *"
-      strategy: /config/missing-strategy.yaml
-      market_data: /config/missing-market.yaml
+      strategy: /strategies/missing-strategy.yaml
+      market_data: /config/market-data.yaml
       notifications: /config/missing-notifications.yaml
       misfire_policy: skip
       misfire_grace_seconds: 10
@@ -740,6 +742,13 @@ def test_scheduler_build_validates_every_referenced_job_authority_before_readine
       maximum_runtime_seconds: 60
       startup_delay_seconds: 0
 """,
+        encoding="utf-8",
+    )
+    (tmp_path / "market-data.yaml").write_text(
+        "market_data:\n"
+        "  provider: binance_usdm\n"
+        "  market_type: LINEAR_PERPETUAL\n"
+        "  instruments: {BTC-USDT-PERP: BTCUSDT}\n",
         encoding="utf-8",
     )
 
@@ -750,6 +759,54 @@ def test_scheduler_build_validates_every_referenced_job_authority_before_readine
             lock_path=tmp_path / "engine.lock",
             config_root=tmp_path,
         )
+
+
+def test_scheduler_build_loads_only_the_global_market_data_authority(tmp_path, monkeypatch) -> None:
+    from smc_ict.composition import runtime_services
+
+    schedule = tmp_path / "schedule.yaml"
+    schedule.write_text(
+        """schedule:
+  enabled: true
+  timezone: UTC
+  jobs:
+    - id: global-market
+      cron: "* * * * *"
+      strategy: /strategies/strategy.yaml
+      market_data: /config/market-data.yaml
+      notifications: /config/notifications.yaml
+      misfire_policy: skip
+      misfire_grace_seconds: 10
+      overlap_policy: skip
+      maximum_runtime_seconds: 60
+      startup_delay_seconds: 0
+""",
+        encoding="utf-8",
+    )
+    loaded_market_paths = []
+
+    class Strategy:
+        instruments = ("BTC-USDT-PERP",)
+
+    class Market:
+        instruments: ClassVar = {"BTC-USDT-PERP": "BTCUSDT"}
+
+    monkeypatch.setattr(runtime_services, "load_strategy", lambda _path: Strategy())
+    monkeypatch.setattr(
+        runtime_services,
+        "load_market_data",
+        lambda path: (loaded_market_paths.append(path), Market())[1],
+    )
+    monkeypatch.setattr(runtime_services, "load_notifications", lambda _path: object())
+
+    runtime_services.build_scheduler(
+        schedule_path=schedule,
+        database=tmp_path / "smc_ict.db",
+        lock_path=tmp_path / "engine.lock",
+        config_root=tmp_path,
+    )
+
+    assert loaded_market_paths == [tmp_path / "market-data.yaml"]
 
 
 def test_scheduler_shutdown_stops_and_drains_an_active_owned_operation() -> None:
@@ -780,8 +837,8 @@ def test_scheduler_shutdown_stops_and_drains_an_active_owned_operation() -> None
             ScheduleJob(
                 id="owned-child",
                 cron="* * * * *",
-                strategy="/config/strategy.yaml",
-                market_data="/config/market.yaml",
+                strategy="/strategies/strategy.yaml",
+                market_data="/config/market-data.yaml",
                 notifications="/config/notifications.yaml",
                 misfire_policy="skip",
                 misfire_grace_seconds=10,
@@ -872,8 +929,8 @@ def test_timed_out_child_is_terminated_killed_drained_and_durably_reconciled(
     job = ScheduleJob(
         id="timeout",
         cron="* * * * *",
-        strategy="/config/strategy.yaml",
-        market_data="/config/market.yaml",
+        strategy="/strategies/strategy.yaml",
+        market_data="/config/market-data.yaml",
         notifications="/config/notifications.yaml",
         misfire_policy="skip",
         misfire_grace_seconds=10,
@@ -889,6 +946,18 @@ def test_timed_out_child_is_terminated_killed_drained_and_durably_reconciled(
         repository=repository,
         termination_grace_seconds=0.01,
     )
+    assert operation._command == [
+        sys.executable,
+        "-m",
+        "smc_ict.cli",
+        "run",
+        "--strategy",
+        "/strategies/strategy.yaml",
+        "--notifications",
+        str(tmp_path / "notifications.yaml"),
+        "--trigger",
+        "scheduled",
+    ]
 
     receipt = operation()
 

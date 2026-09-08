@@ -6,16 +6,31 @@ import json
 import os
 import subprocess
 import sys
-from collections.abc import Callable
-from dataclasses import replace
+import tempfile
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from threading import Lock
 from time import time_ns
 from typing import Protocol
 
-from smc_ict.adapters.persistence.sqlite import SQLiteRepository
+from smc_ict.adapters.persistence.sqlite import (
+    SQLiteRepository,
+    SQLiteSnapshotReader,
+    create_sqlite_snapshot,
+)
+from smc_ict.adapters.reporting.jsonl import BacktestReportPublisher, ReportPublication
+from smc_ict.application.backtesting import (
+    BacktestIdentity,
+    PointInTimeReplay,
+    RequiredRangeResolver,
+)
+from smc_ict.application.execution_simulator import ExecutionSimulator
+from smc_ict.application.historical_sync import HistoricalRangeSyncService, HistoricalSyncReceipt
+from smc_ict.application.metrics import summarize_backtest
 from smc_ict.application.notifications import NotificationRouter
-from smc_ict.application.ports import Notifier
+from smc_ict.application.ports import InstrumentMapping, Notifier
 from smc_ict.application.receipt_contract import (
     RUN_RECEIPT_STATUSES,
     RUN_RECEIPT_SUCCESS_STATUSES,
@@ -33,16 +48,179 @@ from smc_ict.application.scheduler import InternalScheduler, RetryPolicy
 from smc_ict.composition.registries import (
     CompositionRoot,
     build_market_provider,
+    indicator_composition_root,
+    market_data_composition_root,
     notification_composition_root,
 )
 from smc_ict.configuration import (
     DEFERRED_PLUGIN_IDS,
+    hash_backtest,
+    hash_market_data,
+    hash_strategy,
+    load_backtest,
     load_market_data,
     load_notifications,
     load_schedule,
     load_strategy,
+    resolve_backtest_strategy_path,
 )
 from smc_ict.configuration.models import NotificationDestination, ScheduleJob
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimePaths:
+    data_folder: Path
+    database: Path
+    lock: Path
+    health: Path
+    backtests: Path
+
+    @classmethod
+    def from_environ(cls, environ: Mapping[str, str] | None = None) -> RuntimePaths:
+        source = os.environ if environ is None else environ
+        text = source.get("DATA_FOLDER")
+        if text is None or not text:
+            raise ValueError("DATA_FOLDER is required")
+        root = Path(text)
+        if not root.is_absolute() or str(root) != text:
+            raise ValueError("DATA_FOLDER must be an absolute normalized path")
+        return cls(
+            root,
+            root / "smc_ict.db",
+            root / "engine.lock",
+            root / "scheduler.ready",
+            root / "backtests",
+        )
+
+
+def required_runtime_folder(variable: str, environ: Mapping[str, str] | None = None) -> Path:
+    source = os.environ if environ is None else environ
+    text = source.get(variable)
+    if text is None or not text:
+        raise ValueError(f"{variable} is required")
+    path = Path(text)
+    if not path.is_absolute() or str(path) != text:
+        raise ValueError(f"{variable} must be an absolute normalized path")
+    return path
+
+
+def _utc_minute_ms(text: str) -> int:
+    try:
+        parsed = datetime.strptime(text, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("range timestamps must be canonical UTC minute strings") from exc
+    if parsed.strftime("%Y-%m-%dT%H:%M:%SZ") != text or parsed.second != 0:
+        raise ValueError("range timestamps must be canonical UTC minute strings")
+    milliseconds = int(parsed.timestamp()) * 1000
+    if milliseconds < 0:
+        raise ValueError("range timestamps must not precede the Unix epoch")
+    return milliseconds
+
+
+def sync_historical_range(*, start: str, end: str) -> HistoricalSyncReceipt:
+    paths = RuntimePaths.from_environ()
+    market = load_market_data(required_runtime_folder("CONFIG_FOLDER") / "market-data.yaml")
+    start_ms = _utc_minute_ms(start)
+    end_ms = _utc_minute_ms(end)
+    if start_ms > end_ms:
+        raise ValueError("historical range start must not follow end")
+    provider = build_market_provider(market, market_data_composition_root())
+    mappings = tuple(
+        InstrumentMapping(instrument_id, provider_symbol)
+        for instrument_id, provider_symbol in market.instruments.items()
+    )
+    with ProcessLock(paths.lock) as lock:
+        if not lock.acquired:
+            raise RuntimeError("historical sync cannot overlap the active writer")
+        return HistoricalRangeSyncService(provider, SQLiteRepository(paths.database)).sync_all(
+            mappings,
+            start_ms,
+            end_ms,
+        )
+
+
+def run_backtest(scenario_path: str | Path) -> ReportPublication:
+    """Synchronize once, snapshot under the writer lock, then remain offline."""
+
+    paths = RuntimePaths.from_environ()
+    scenario = load_backtest(scenario_path)
+    strategy = load_strategy(resolve_backtest_strategy_path(scenario_path, scenario))
+    market = load_market_data(required_runtime_folder("CONFIG_FOLDER") / "market-data.yaml")
+    if set(strategy.instruments) - market.instruments.keys():
+        raise ValueError("strategy instruments are missing from market-data configuration")
+    required = RequiredRangeResolver.resolve(
+        scenario.period, history_minutes=strategy.history_minutes
+    )
+    provider = build_market_provider(market, market_data_composition_root())
+    mappings = tuple(
+        InstrumentMapping(instrument_id, market.instruments[instrument_id])
+        for instrument_id in strategy.instruments
+    )
+    paths.backtests.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".backtest-", dir=paths.backtests) as temporary:
+        snapshot_path = Path(temporary) / "snapshot.sqlite3"
+        repository = SQLiteRepository(paths.database)
+        with ProcessLock(paths.lock) as lock:
+            if not lock.acquired:
+                raise RuntimeError("backtest cannot overlap the active writer")
+            HistoricalRangeSyncService(provider, repository).sync_all(
+                mappings, required.start_open_ms, required.end_open_ms
+            )
+            create_sqlite_snapshot(paths.database, snapshot_path)
+
+        reader = SQLiteSnapshotReader(snapshot_path)
+        root = indicator_composition_root()
+        factories = {signal.id: root.plugins.resolve(signal.id) for signal in strategy.signals}
+        replay = PointInTimeReplay(
+            strategy=strategy,
+            provider_id=market.provider,
+            market_type=market.market_type,
+            candle_source=reader,
+            plugin_factories=factories,  # type: ignore[arg-type]
+        ).run(scenario.period)
+        candles = tuple(
+            candle
+            for instrument_id in strategy.instruments
+            for candle in reader.load_candles(
+                market.provider,
+                market.market_type,
+                instrument_id,
+                required.start_open_ms,
+                required.end_open_ms,
+            )
+        )
+        simulation = ExecutionSimulator(
+            entry=scenario.entry,
+            execution=scenario.execution,
+            costs=scenario.costs,
+            execution_bar_minutes=_timeframe_minutes(strategy.roles["execution"]),
+        ).run(replay.evaluations, candles)
+        metrics = summarize_backtest(replay.evaluations, simulation.trades)
+        identity = BacktestIdentity.create(
+            scenario_hash=hash_backtest(scenario),
+            strategy_hash=hash_strategy(strategy),
+            market_data_hash=hash_market_data(market),
+            candle_data_hash=replay.data_hash,
+            git_commit=current_git_commit(),
+            period=scenario.period,
+            required_range=required,
+        )
+        return BacktestReportPublisher(paths.backtests).publish(
+            identity=identity,
+            scenario=scenario,
+            strategy=strategy,
+            market_data=market,
+            replay=replay,
+            simulation=simulation,
+            metrics=metrics,
+        )
+
+
+def _timeframe_minutes(timeframe: str) -> int:
+    try:
+        return {"1m": 1, "5m": 5, "1h": 60, "4h": 240}[timeframe]
+    except KeyError as exc:
+        raise ValueError("unsupported execution timeframe") from exc
 
 
 def current_time_ms() -> int:
@@ -348,15 +526,9 @@ def _subprocess_operation(
         "smc_ict.cli",
         "run",
         "--strategy",
-        str(_host_config_path(job.strategy, config_root)),
-        "--market-data",
-        str(_host_config_path(job.market_data, config_root)),
+        job.strategy,
         "--notifications",
         str(_host_config_path(job.notifications, config_root)),
-        "--database",
-        str(database),
-        "--lock",
-        str(lock_path),
         "--trigger",
         "scheduled",
     ]
@@ -378,10 +550,11 @@ def build_scheduler(
     config_root: str | Path,
 ) -> InternalScheduler:
     schedule = load_schedule(schedule_path)
+    market = load_market_data(Path(config_root) / "market-data.yaml") if schedule.enabled else None
     for job in schedule.jobs if schedule.enabled else ():
-        strategy = load_strategy(_host_config_path(job.strategy, config_root))
-        market = load_market_data(_host_config_path(job.market_data, config_root))
+        strategy = load_strategy(job.strategy)
         load_notifications(_host_config_path(job.notifications, config_root))
+        assert market is not None
         if set(strategy.instruments) - market.instruments.keys():
             raise ValueError("strategy instruments are missing from market-data configuration")
     repository = SQLiteRepository(database)

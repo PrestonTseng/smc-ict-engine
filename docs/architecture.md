@@ -13,3 +13,7 @@ SQLite has exactly five tables: `candles_1m`, `sync_state`, `runs`, `observation
 The scheduler owns explicit child processes. Startup recovery uses the same process lock. Shutdown stops new fires before it stops and reconciles an active child.
 
 Notification routing is sequential and deterministic by destination ID. Each destination has isolated construction, filtering, batching, retries, and receipts.
+
+Backtesting is a separate read-only evidence flow. It runs the shared historical-readiness service first, then creates a short-lived SQLite snapshot while holding the existing writer lock. After the snapshot is complete, point-in-time replay, conservative execution simulation, metrics, and rendering use only the immutable snapshot and make no provider requests.
+
+The report adapter stages all machine-readable files and the self-contained HTML in a sibling directory, syncs them, and exposes the complete result with one atomic rename. An existing identity is reusable only when every artifact byte matches. Backtests do not add or mutate production tables: SQLite remains exactly `candles_1m`, `sync_state`, `runs`, `observations`, and `decisions`.

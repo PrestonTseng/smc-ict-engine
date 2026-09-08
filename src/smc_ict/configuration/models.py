@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
+from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from pathlib import PurePosixPath
 from types import MappingProxyType
@@ -806,3 +807,72 @@ class NotificationDocument(BaseModel):
             if any(value < 1 for value in destination.retries.backoff_seconds):
                 raise ValueError("backoff seconds must be in the range 1..300")
         return self
+
+
+@dataclass(frozen=True, slots=True)
+class BacktestPeriod:
+    start_ms: int
+    end_ms: int
+
+    def canonical_dict(self) -> dict[str, object]:
+        return {"start_ms": self.start_ms, "end_ms": self.end_ms}
+
+
+@dataclass(frozen=True, slots=True)
+class BacktestEntryConfig:
+    mode: str
+    expiry_execution_bars: int
+
+    def canonical_dict(self) -> dict[str, object]:
+        return {field: getattr(self, field) for field in self.__dataclass_fields__}
+
+
+@dataclass(frozen=True, slots=True)
+class BacktestExecutionConfig:
+    maximum_holding_minutes: int
+    intrabar_conflict: str
+    allow_same_minute_target: bool
+
+    def canonical_dict(self) -> dict[str, object]:
+        return {field: getattr(self, field) for field in self.__dataclass_fields__}
+
+
+@dataclass(frozen=True, slots=True)
+class BacktestCostConfig:
+    taker_fee_bps: str
+    adverse_slippage_bps: str
+
+    def canonical_dict(self) -> dict[str, object]:
+        return {field: getattr(self, field) for field in self.__dataclass_fields__}
+
+
+@dataclass(frozen=True, slots=True)
+class BacktestOutputConfig:
+    existing_result: str
+
+    def canonical_dict(self) -> dict[str, object]:
+        return {"existing_result": self.existing_result}
+
+
+@dataclass(frozen=True, slots=True)
+class BacktestScenarioConfig:
+    name: str
+    version: str
+    strategy: str
+    period: BacktestPeriod
+    entry: BacktestEntryConfig
+    execution: BacktestExecutionConfig
+    costs: BacktestCostConfig
+    output: BacktestOutputConfig
+
+    def canonical_dict(self) -> dict[str, object]:
+        return {
+            "name": self.name,
+            "version": self.version,
+            "strategy": self.strategy,
+            "period": self.period.canonical_dict(),
+            "entry": self.entry.canonical_dict(),
+            "execution": self.execution.canonical_dict(),
+            "costs": self.costs.canonical_dict(),
+            "output": self.output.canonical_dict(),
+        }

@@ -37,3 +37,15 @@ Stop the engine before a restore. Run these commands against the backup:
 sqlite3 backups/smc_ict.db 'PRAGMA integrity_check;'
 sqlite3 backups/smc_ict.db 'PRAGMA foreign_key_check;'
 ```
+
+## `existing backtest result differs`
+
+The deterministic backtest ID already exists but at least one artifact byte differs. The engine will not overwrite or repair it. Preserve the directory for investigation, compare every file with `manifest.json`, and rerun only after restoring the original immutable result or selecting a legitimately changed scenario that produces a new ID.
+
+## `snapshot candle range is incomplete`
+
+The offline snapshot does not contain an exact continuous required range, or a candle identity does not match the globally configured provider/instrument. Rerun `market-data sync-range` for the scenario period plus strategy warm-up and investigate any source-conflict or provider failure. No partial report is published for a snapshot candle range failure.
+
+## Backtest lock or interrupted publication
+
+`backtest cannot overlap the active writer` means the scheduler or another operation owns `DATA_FOLDER/engine.lock`. Stop the scheduler through its normal shutdown path; never delete an active lock file. Temporary `.backtest-*` snapshot directories and dot-prefixed report staging directories are removed on handled failures. A visible `<backtest-id>` directory is either complete and byte-verified or treated as an immutable conflict.

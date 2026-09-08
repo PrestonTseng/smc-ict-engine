@@ -53,7 +53,7 @@ Read readiness and logs:
 
 ```sh
 docker compose ps
-uv run smc-ict database status --database "$DATA_FOLDER/smc_ict.db"
+uv run smc-ict database status
 docker compose logs --follow engine
 ```
 
@@ -83,14 +83,24 @@ uv run smc-ict validate \
 
 Validation checks YAML structure, types, provider IDs, schedule policy, notification references, and strategy dependencies. It does not resolve a notification endpoint. Endpoint resolution occurs only at the selected notification adapter boundary.
 
-`config/market-data.yaml` selects OKX swap. `config/market-data.binance-usdm.yaml` remains an inactive Binance USD-M alternate. Keep the configured instrument IDs aligned with the selected provider symbols. Use one market-data file per run.
+`config/market-data.yaml` selects OKX swap. `config/market-data.okx-swap.yaml` is an identical,
+explicitly named example. `config/market-data.binance-usdm.yaml` is an inactive Binance USD-M
+alternate. Runtime commands read only `${CONFIG_FOLDER}/market-data.yaml`. Copy the selected example
+to that path, and keep its instrument IDs aligned with the strategy.
 
 Bootstrap or inspect a local database:
 
 ```sh
-uv run smc-ict database bootstrap --database "$DATA_FOLDER/smc_ict.db"
-uv run smc-ict database status --database "$DATA_FOLDER/smc_ict.db"
+export DATA_FOLDER="$(pwd)/data"
+export CONFIG_FOLDER="$(pwd)/config"
+uv run smc-ict database bootstrap
+uv run smc-ict database status
 ```
+
+Host commands derive `smc_ict.db`, `engine.lock`, and `scheduler.ready` only from
+`DATA_FOLDER`; commands that compose runtime services derive their configuration root only from
+`CONFIG_FOLDER`. Both roots must be normalized absolute paths. Operation-level path overrides are
+intentionally rejected.
 
 The notifier dry test validates a bounded event payload without a delivery attempt:
 
@@ -106,25 +116,102 @@ uv run smc-ict notifier-test \
 Run a manual receipt path:
 
 ```sh
+export DATA_FOLDER="$(pwd)/data"
+export CONFIG_FOLDER="$(pwd)/config"
 uv run smc-ict run \
   --strategy strategies/source-aligned-research.yaml \
-  --market-data config/market-data.yaml \
   --notifications config/notifications.yaml \
-  --database "$DATA_FOLDER/smc_ict.db" \
-  --lock "$DATA_FOLDER/engine.lock" \
   --trigger manual
 ```
 
+The run loads market-data configuration from `${CONFIG_FOLDER}/market-data.yaml`.
+
 The checked-in source-aligned strategy executes seven Python plugins over completed candles. Warm-up gaps produce `UNAVAILABLE`; fully evaluable gates that are not satisfied produce `NO_TRADE`. A `READY` result remains research evidence, not an order instruction.
+
+## Deterministic backtesting
+
+Backtests use the same global `config/market-data.yaml`, canonical candle store, strategy DAG, and ordered decision policy as normal research runs. A scenario selects one exact strategy and owns only its UTC period, conservative execution assumptions, costs, and immutable-output policy.
+
+```sh
+export DATA_FOLDER="$(pwd)/data"
+export CONFIG_FOLDER="$(pwd)/config"
+export SMC_ICT_GIT_COMMIT="$(git rev-parse HEAD)"
+uv run smc-ict backtest backtests/source-aligned-research/one-year-baseline.yaml
+```
+
+V1 accepts only `touch_limit` entries. A pending entry expires after the configured number of
+execution bars. The simulator permits only one pending or open trade per instrument.
+
+V1 also fixes these settings:
+
+- `intrabar_conflict: stop_first` closes at the stop when one candle touches both exit levels.
+- `allow_same_minute_target: false` prevents a target exit during the entry minute. A stop can still close the trade during that minute.
+- `existing_result: fail` prevents replacement or repair of an existing result. An identical result is verified and reused. A different result causes an error.
+
+The command synchronizes the requested period plus strategy warm-up under the shared writer lock, creates a short-lived SQLite online snapshot, releases the lock, and performs replay, simulation, and reporting offline. It publishes `${DATA_FOLDER}/backtests/<backtest-id>/` only after all six artifacts are complete:
+
+- `manifest.json` binds immutable input identities and the byte size and SHA-256 of every payload artifact.
+- `decisions.jsonl` and `pipeline-traces.jsonl` preserve every ordered evaluation, pass/reject/unavailable reason, and first rejection.
+- `trades.jsonl` contains normalized, one-unit simulated outcomes without account sizing.
+- `summary.json` contains overall, instrument, direction, disposition, and unavailable-reason metrics.
+- `report.html` embeds each canonical evaluation as a deterministic directly addressable gzip record, plus a compact chunked filter index, so each page decompresses at most its 25 selected evaluations with no CDN or network dependency. Browsers without the standard `DecompressionStream` gzip primitive show an explicit compatibility failure instead of partial evidence.
+
+An identical rerun verifies and reuses byte-identical output. If any existing artifact differs, the command fails without overwriting it. A failure before publication leaves no partial result directory and never writes backtest rows to the five production tables.
+
+The offline report benchmark and Chromium probe do not access a provider. The benchmark creates
+synthetic replay-shaped evaluations. It tests report publication and browser limits, not strategy
+results, execution results, or provider performance.
+
+```sh
+uv sync --locked --all-groups
+uv run --locked playwright install chromium
+benchmark_root="$(mktemp -d)"
+UV_NO_NETWORK=1 uv run --locked python scripts/benchmark_backtest_report.py \
+  --output-root "$benchmark_root/reports" \
+  --result-json "$benchmark_root/generation.json"
+report="$(printf '%s\n' "$benchmark_root"/reports/*/report.html)"
+UV_NO_NETWORK=1 uv run --locked python scripts/probe_backtest_report.py \
+  "$report" \
+  --result-json "$benchmark_root/browser.json"
+```
+
+The benchmark defaults to 210,240 synthetic evaluations across two instruments at five-minute
+intervals. Each evaluation has 14 ordered trace steps. The JSON separates fixture generation from
+report publication. The recorded time and memory values are measurements, not an SLA.
+
+On a disposable hosted Linux worker, install Chromium and its system packages with the same locked
+client that CI uses:
+
+```sh
+uv run --locked playwright install --with-deps chromium
+```
+
+This hosted-worker command can change system packages. For an existing local Chromium binary, omit
+the browser install and pass `--chromium-executable /absolute/path/to/chromium` to the probe.
+
+For Compose, stop the scheduled writer during a long historical fill and use the manual profile, which does not mount or resolve notification secrets:
+
+```sh
+docker compose stop engine
+docker compose --profile manual run --rm manual \
+  backtest /backtests/source-aligned-research/one-year-baseline.yaml
+docker compose start engine
+```
 
 Start the scheduler outside Compose only for local diagnosis:
 
 ```sh
+export DATA_FOLDER="$(pwd)/data"
+export CONFIG_FOLDER="$(pwd)/config"
 uv run smc-ict scheduler \
-  --schedule config/schedule.yaml \
-  --database "$DATA_FOLDER/smc_ict.db" \
-  --lock "$DATA_FOLDER/engine.lock" \
-  --config-root config
+  --schedule config/schedule.yaml
+```
+
+While that scheduler is running, read its readiness marker from another shell with the same
+`DATA_FOLDER`:
+
+```sh
+uv run smc-ict scheduler-health
 ```
 
 ## Strategy DAG authoring

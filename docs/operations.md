@@ -7,6 +7,7 @@ single Discord endpoint without placing it in the command line or shell history:
 
 ```bash
 export DATA_FOLDER="/absolute/path/to/smc-ict-data"
+export CONFIG_FOLDER="$(pwd)/config"
 sudo install -d -m 0750 -o 10001 -g 10001 "$DATA_FOLDER"
 install -d -m 0700 secrets
 mkdir -p backups
@@ -15,16 +16,19 @@ read -rsp 'Discord webhook URL: ' DISCORD_WEBHOOK_URL && printf '\n'
 printf '%s' "$DISCORD_WEBHOOK_URL" > secrets/discord_webhook_url
 unset DISCORD_WEBHOOK_URL
 export SMC_ICT_GIT_COMMIT="$(git rev-parse HEAD)"
-uv run smc-ict database bootstrap --database "$DATA_FOLDER/smc_ict.db"
-uv run smc-ict database status --database "$DATA_FOLDER/smc_ict.db"
+uv run smc-ict database bootstrap
+uv run smc-ict database status
 docker compose config --quiet
 docker compose build engine
 docker compose up -d engine
 ```
 
-`DATA_FOLDER` is the only writable application bind and must be exported and non-empty. Compose
-requires the configured data, config, and strategy sources and rejects missing sources rather than
-creating them.
+`DATA_FOLDER` is the only writable application bind and must be exported and non-empty. Host
+commands derive the database, lock, and scheduler health paths only from this normalized absolute
+root. Runtime composition derives its configuration root only from the normalized absolute
+`CONFIG_FOLDER`; operation-level path overrides are intentionally rejected. Compose supplies both
+roots inside the container and requires the configured data, config, and strategy sources instead
+of creating them.
 
 Rotate the secret atomically, then recreate the service so Compose remounts it:
 
@@ -42,7 +46,7 @@ docker compose up -d --force-recreate engine
 ```sh
 docker compose ps
 docker compose logs --tail 100 engine
-uv run smc-ict database status --database "$DATA_FOLDER/smc_ict.db"
+uv run smc-ict database status
 ```
 
 The checked-in cron fires at minutes `1,16,31,46`: four runs per hour, shortly after the four
@@ -54,19 +58,19 @@ service log and persisted run receipts.
 
 ## Run one manual receipt path
 
-This uses the same image, configuration, data bind, process lock, and Discord secret as the
-scheduler. It can contact the configured provider and destination; use it only during an approved
-operator window.
+This uses the same image, configuration, data bind, and process lock as the scheduler. The manual
+service has no Discord secret. This command does not load notification configuration or send
+notifications. It can contact the configured provider. Use it only during an approved operator
+window.
 
 ```sh
 docker compose --profile manual run --rm manual run \
   --strategy /strategies/source-aligned-research.yaml \
-  --market-data /config/market-data.yaml \
-  --notifications /config/notifications.yaml \
-  --database /data/smc_ict.db \
-  --lock /data/engine.lock \
   --trigger manual
 ```
+
+The manual service supplies `DATA_FOLDER=/data` and `CONFIG_FOLDER=/config`; the run therefore
+loads `/config/market-data.yaml` and uses the database and lock under `/data`.
 
 ## Do a notification dry test
 
@@ -112,3 +116,29 @@ docker compose down
 ```
 
 The scheduler stops new fires. It terminates, kills, drains, and reconciles an active child within the bounded shutdown path.
+
+## Run an immutable backtest
+
+For host execution, set normalized absolute runtime roots and bind the result to the exact commit:
+
+```sh
+export DATA_FOLDER="$(pwd)/data"
+export CONFIG_FOLDER="$(pwd)/config"
+export SMC_ICT_GIT_COMMIT="$(git rev-parse HEAD)"
+uv run smc-ict backtest backtests/source-aligned-research/one-year-baseline.yaml
+```
+
+For Compose, avoid overlapping a long historical fill with the scheduler. The manual service has no Discord environment or secret mount:
+
+```sh
+docker compose stop engine
+docker compose --profile manual run --rm manual \
+  market-data sync-range --start 2025-06-03T00:00:00Z --end 2026-08-31T23:59:00Z
+docker compose --profile manual run --rm manual \
+  backtest /backtests/source-aligned-research/one-year-baseline.yaml
+docker compose start engine
+```
+
+Open `${DATA_FOLDER}/backtests/<backtest-id>/report.html` locally. Treat JSON and JSONL as the
+canonical audit evidence. Do not edit an existing result. Change the scenario version or assumptions
+to produce a new identity.

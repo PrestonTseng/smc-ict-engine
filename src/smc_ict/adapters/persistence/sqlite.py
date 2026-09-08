@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
+import tempfile
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 from typing import cast
@@ -23,7 +26,7 @@ from smc_ict.application.receipt_contract import (
     RUN_RECEIPT_SUCCESS_STATUSES,
     SCHEDULER_FAILURE_OUTCOMES,
 )
-from smc_ict.domain import ClosedCandle
+from smc_ict.domain import ClosedCandle, hash_candles
 
 DDL = """
 CREATE TABLE candles_1m (
@@ -212,6 +215,99 @@ class SourceConflictError(RuntimeError):
 
 class PersistenceConflictError(RuntimeError):
     """An idempotence key already names different durable evidence."""
+
+
+@dataclass(frozen=True, slots=True)
+class SnapshotReceipt:
+    path: Path
+    candle_count: int
+    data_hash: str
+
+
+class SQLiteSnapshotReader:
+    """Read canonical candles from one finalized immutable SQLite snapshot."""
+
+    def __init__(self, path: str | Path) -> None:
+        self.path = Path(path)
+        with self._connect() as connection:
+            version = cast(int, connection.execute("PRAGMA user_version").fetchone()[0])
+            tables = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+                )
+            }
+        if version != 1 or tables != _TABLES:
+            raise RuntimeError("unsupported or malformed SQLite snapshot")
+
+    def _connect(self) -> sqlite3.Connection:
+        uri = f"{self.path.resolve().as_uri()}?mode=ro&immutable=1"
+        connection = sqlite3.connect(uri, uri=True, isolation_level=None)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA query_only=ON")
+        connection.execute("PRAGMA trusted_schema=OFF")
+        return connection
+
+    def load_candles(
+        self,
+        provider_id: str,
+        market_type: str,
+        instrument_id: str,
+        start_open_ms: int,
+        end_open_ms: int,
+    ) -> tuple[ClosedCandle, ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT " + ",".join(_CANDLE_COLUMNS) + " FROM candles_1m "
+                "WHERE provider_id=? AND market_type=? AND instrument_id=? AND interval='1m' "
+                "AND open_time_ms BETWEEN ? AND ? ORDER BY open_time_ms",
+                (provider_id, market_type, instrument_id, start_open_ms, end_open_ms),
+            ).fetchall()
+        return tuple(SQLiteRepository._row_to_candle(row) for row in rows)
+
+    def _load_all_candles(self) -> tuple[ClosedCandle, ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT " + ",".join(_CANDLE_COLUMNS) + " FROM candles_1m "
+                "ORDER BY provider_id,market_type,instrument_id,interval,open_time_ms"
+            ).fetchall()
+        return tuple(SQLiteRepository._row_to_candle(row) for row in rows)
+
+
+def create_sqlite_snapshot(
+    source_path: str | Path, destination_path: str | Path
+) -> SnapshotReceipt:
+    """Create a fail-closed online backup without opening the source for writes."""
+
+    source = Path(source_path)
+    destination = Path(destination_path)
+    if not source.is_file():
+        raise FileNotFoundError(source)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.open("xb").close()
+    temporary_path: Path | None = None
+    try:
+        handle = tempfile.NamedTemporaryFile(
+            prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent, delete=False
+        )
+        temporary_path = Path(handle.name)
+        handle.close()
+        source_uri = f"{source.resolve().as_uri()}?mode=ro"
+        with sqlite3.connect(source_uri, uri=True) as source_connection:
+            source_connection.execute("PRAGMA query_only=ON")
+            with sqlite3.connect(temporary_path) as destination_connection:
+                source_connection.backup(destination_connection)
+        reader = SQLiteSnapshotReader(temporary_path)
+        candles = reader._load_all_candles()
+        os.replace(temporary_path, destination)
+        temporary_path = None
+        return SnapshotReceipt(destination, len(candles), hash_candles(candles))
+    except Exception:
+        destination.unlink(missing_ok=True)
+        raise
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
 
 
 class SQLiteRepository:

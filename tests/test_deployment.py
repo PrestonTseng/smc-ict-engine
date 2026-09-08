@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
 import tarfile
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from ruamel.yaml import YAML
@@ -31,6 +33,21 @@ if touch /run/secrets/discord_webhook_url; then
 fi;
 echo PROBE_OK
 """
+
+
+def _run_cli(argv: list[str]) -> int:
+    from smc_ict.cli import main
+
+    logger = logging.getLogger("smc_ict")
+    handlers = list(logger.handlers)
+    level = logger.level
+    propagate = logger.propagate
+    try:
+        return main(argv)
+    finally:
+        logger.handlers[:] = handlers
+        logger.setLevel(level)
+        logger.propagate = propagate
 
 
 def _daemon_visible_project_fixture_candidates() -> tuple[Path, ...]:
@@ -156,19 +173,7 @@ def test_compose_contract_keeps_the_database_in_the_required_bind_mount() -> Non
     compose = YAML(typ="safe").load(compose_path.read_text(encoding="utf-8"))
     service = compose["services"]["engine"]
 
-    assert service["command"] == [
-        "scheduler",
-        "--schedule",
-        "/config/schedule.yaml",
-        "--database",
-        "/data/smc_ict.db",
-        "--lock",
-        "/data/engine.lock",
-        "--health-file",
-        "/data/scheduler.ready",
-        "--config-root",
-        "/",
-    ]
+    assert service["environment"] == {"CONFIG_FOLDER": "/config", "DATA_FOLDER": "/data"}
     assert service["volumes"] == [
         {
             "type": "bind",
@@ -190,14 +195,87 @@ def test_compose_contract_keeps_the_database_in_the_required_bind_mount() -> Non
             "read_only": True,
             "bind": {"create_host_path": False},
         },
+        {
+            "type": "bind",
+            "source": "./backtests",
+            "target": "/backtests",
+            "read_only": True,
+            "bind": {"create_host_path": False},
+        },
     ]
-    assert service["healthcheck"]["test"] == [
-        "CMD",
-        "smc-ict",
-        "scheduler-health",
-        "--health-file",
-        "/data/scheduler.ready",
+
+
+def test_compose_engine_command_executes_with_runtime_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from smc_ict import cli
+
+    engine = YAML(typ="safe").load((ROOT / "compose.yaml").read_text(encoding="utf-8"))["services"][
+        "engine"
     ]
+    data_folder = tmp_path / "data"
+    config_folder = tmp_path / "config"
+    data_folder.mkdir()
+    config_folder.mkdir()
+    monkeypatch.setenv("DATA_FOLDER", str(data_folder))
+    monkeypatch.setenv("CONFIG_FOLDER", str(config_folder))
+    captured: dict[str, object] = {}
+
+    class SchedulerProbe:
+        def start(self) -> None:
+            captured["started"] = True
+
+        def health(self) -> SimpleNamespace:
+            return SimpleNamespace(configured_jobs=0, recovered_run_ids=())
+
+        def shutdown(self, *, wait: bool) -> None:
+            captured["shutdown_wait"] = wait
+
+    class NonBlockingEvent:
+        def wait(self) -> None:
+            captured["waited"] = True
+
+    def build_scheduler_probe(**kwargs: object) -> SchedulerProbe:
+        captured.update(kwargs)
+        return SchedulerProbe()
+
+    monkeypatch.setattr(cli, "build_scheduler", build_scheduler_probe)
+    monkeypatch.setattr(cli, "Event", NonBlockingEvent)
+
+    assert _run_cli(engine["command"]) == 0
+    assert captured == {
+        "schedule_path": "/config/schedule.yaml",
+        "database": data_folder / "smc_ict.db",
+        "lock_path": data_folder / "engine.lock",
+        "config_root": config_folder,
+        "started": True,
+        "waited": True,
+        "shutdown_wait": True,
+    }
+    assert [json.loads(line)["status"] for line in capsys.readouterr().out.splitlines()] == [
+        "READY",
+        "SHUTDOWN",
+    ]
+    assert not (data_folder / "scheduler.ready").exists()
+
+
+def test_compose_healthcheck_executes_against_data_folder_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    engine = YAML(typ="safe").load((ROOT / "compose.yaml").read_text(encoding="utf-8"))["services"][
+        "engine"
+    ]
+    data_folder = tmp_path / "data"
+    data_folder.mkdir()
+    monkeypatch.setenv("DATA_FOLDER", str(data_folder))
+    (data_folder / "scheduler.ready").write_text(
+        json.dumps({"pid": os.getpid(), "status": "READY"}), encoding="utf-8"
+    )
+    command = engine["healthcheck"]["test"]
+    assert command[:2] == ["CMD", "smc-ict"]
+
+    assert _run_cli(command[2:]) == 0
+    assert json.loads(capsys.readouterr().out) == {"pid": os.getpid(), "status": "READY"}
 
 
 def test_compose_avoids_the_legacy_nested_read_only_bind_mount_and_starts_a_fresh_probe(
@@ -227,10 +305,14 @@ def test_compose_avoids_the_legacy_nested_read_only_bind_mount_and_starts_a_fres
             "read_only": True,
             "bind": {"create_host_path": False},
         },
+        {
+            "type": "bind",
+            "source": "./backtests",
+            "target": "/backtests",
+            "read_only": True,
+            "bind": {"create_host_path": False},
+        },
     ]
-    assert engine["command"][0:2] == ["scheduler", "--schedule"]
-    assert engine["command"][-2:] == ["--config-root", "/"]
-
     host_fixture = _daemon_visible_project_fixture()
     host_config = host_fixture / "config"
     host_strategies = host_fixture / "strategies"
@@ -558,7 +640,7 @@ def test_compose_operator_contract_uses_direct_commands_and_native_guards() -> N
     assert "docker compose up -d engine" in operator_docs
     assert "docker compose ps" in operator_docs
     assert "${DATA_FOLDER:?Set DATA_FOLDER to the writable host data directory}" in compose_text
-    assert compose_text.count("create_host_path: false") == 3
+    assert compose_text.count("create_host_path: false") == 4
 
 
 def test_compose_and_image_apply_non_root_immutable_runtime_hardening() -> None:
@@ -577,6 +659,8 @@ def test_compose_and_image_apply_non_root_immutable_runtime_hardening() -> None:
     manual = compose["services"]["manual"]
     assert manual["profiles"] == ["manual"]
     assert manual["user"] == "10001:10001"
+    assert manual["environment"] == {"CONFIG_FOLDER": "/config", "DATA_FOLDER": "/data"}
+    assert "secrets" not in manual
 
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
     assert (
@@ -726,9 +810,111 @@ def test_readme_documents_the_operator_workflows_and_safety_boundaries() -> None
 
     assert "The Compose health command reads the scheduler readiness marker" in readme
     assert "The Compose health command reads `/data/smc_ict.db`" not in readme
-    assert "--config-root config" in readme
-    assert "--config-root ." not in readme
+    assert 'export DATA_FOLDER="$(pwd)/data"' in readme
+    assert 'export CONFIG_FOLDER="$(pwd)/config"' in readme
     assert "./data" not in readme
+
+
+def test_documented_operator_commands_parse_with_global_runtime_authority() -> None:
+    from smc_ict.cli import _parser
+
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    operations = (ROOT / "docs/operations.md").read_text(encoding="utf-8")
+    operator_docs = "\n".join((readme, operations))
+
+    forbidden_operation_arguments = (
+        "database bootstrap --database",
+        "database status --database",
+        "--database /data/smc_ict.db",
+        "--lock /data/engine.lock",
+        "--config-root",
+        "--health-file",
+        "--market-data /config/market-data.yaml",
+    )
+    for forbidden_argument in forbidden_operation_arguments:
+        assert forbidden_argument not in operator_docs
+
+    expected_shapes = (
+        (
+            ["database", "bootstrap"],
+            {"command": "database", "database_command": "bootstrap"},
+        ),
+        (["database", "status"], {"command": "database", "database_command": "status"}),
+        (
+            [
+                "run",
+                "--strategy",
+                "strategies/source-aligned-research.yaml",
+                "--notifications",
+                "config/notifications.yaml",
+                "--trigger",
+                "manual",
+            ],
+            {
+                "command": "run",
+                "strategy": "strategies/source-aligned-research.yaml",
+                "notifications": "config/notifications.yaml",
+                "trigger": "manual",
+            },
+        ),
+        (
+            ["scheduler", "--schedule", "config/schedule.yaml"],
+            {"command": "scheduler", "schedule": "config/schedule.yaml"},
+        ),
+        (["scheduler-health"], {"command": "scheduler-health"}),
+        (
+            ["backtest", "backtests/source-aligned-research/one-year-baseline.yaml"],
+            {
+                "command": "backtest",
+                "scenario": "backtests/source-aligned-research/one-year-baseline.yaml",
+            },
+        ),
+        (
+            [
+                "run",
+                "--strategy",
+                "/strategies/source-aligned-research.yaml",
+                "--trigger",
+                "manual",
+            ],
+            {
+                "command": "run",
+                "strategy": "/strategies/source-aligned-research.yaml",
+                "notifications": None,
+                "trigger": "manual",
+            },
+        ),
+        (
+            ["backtest", "/backtests/source-aligned-research/one-year-baseline.yaml"],
+            {
+                "command": "backtest",
+                "scenario": "/backtests/source-aligned-research/one-year-baseline.yaml",
+            },
+        ),
+    )
+    parser = _parser()
+    for argv, expected in expected_shapes:
+        assert vars(parser.parse_args(argv)) == expected
+
+
+def test_documented_database_and_scheduler_health_commands_execute_from_data_folder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    data_folder = tmp_path / "data"
+    data_folder.mkdir()
+    monkeypatch.setenv("DATA_FOLDER", str(data_folder))
+
+    assert _run_cli(["database", "bootstrap"]) == 0
+    assert _run_cli(["database", "status"]) == 0
+    (data_folder / "scheduler.ready").write_text(
+        json.dumps({"pid": os.getpid(), "status": "READY"}), encoding="utf-8"
+    )
+    assert _run_cli(["scheduler-health"]) == 0
+
+    payloads = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert payloads[0] == {"schema_version": 1, "status": "READY", "tables": 5}
+    assert payloads[1]["runs"] == 0
+    assert payloads[2] == {"pid": os.getpid(), "status": "READY"}
 
 
 def test_operator_docs_cover_the_single_secret_release_workflow_and_runtime_evidence() -> None:
@@ -745,7 +931,7 @@ def test_operator_docs_cover_the_single_secret_release_workflow_and_runtime_evid
         "docker compose up -d engine",
         "docker compose ps",
         "docker compose logs --tail 100 engine",
-        'smc-ict database status --database "$DATA_FOLDER/smc_ict.db"',
+        "smc-ict database status",
         "docker compose --profile manual run --rm manual run",
         "docker compose down",
     ):
@@ -790,6 +976,35 @@ def test_required_operator_document_set_is_present_and_cross_linked() -> None:
 
     env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
     assert env_example == "SMC_ICT_GIT_COMMIT=\nDATA_FOLDER=/absolute/path/to/smc-ict-data\n"
+
+
+def test_operator_docs_cover_immutable_backtest_workflow_and_failures() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    for phrase in ("smc-ict backtest", "manifest.json", "pipeline-traces.jsonl", "report.html"):
+        assert phrase in readme
+
+    expectations = {
+        "architecture.md": ("SQLite snapshot", "atomic rename", "production tables"),
+        "configuration.md": ("backtests/<strategy-id>/", "existing_result", "market-data.yaml"),
+        "operations.md": ("--profile manual run --rm manual", "backtest /backtests/"),
+        "troubleshooting.md": ("existing backtest result differs", "snapshot candle range"),
+    }
+    for filename, phrases in expectations.items():
+        document = ROOT.joinpath("docs", filename).read_text(encoding="utf-8")
+        for phrase in phrases:
+            assert phrase in document
+
+
+def test_human_facing_runtime_paths_and_manual_notifications_match_compose() -> None:
+    design = (ROOT / "docs/deployment-design.html").read_text(encoding="utf-8")
+    operations = (ROOT / "docs/operations.md").read_text(encoding="utf-8")
+    manual_command = operations.split("## Run one manual receipt path", 1)[1].split("##", 1)[0]
+
+    assert "${DATA_FOLDER}/smc_ict.db" in design
+    assert "./data/smc_ict.db" not in design
+    assert "${DATA_FOLDER}/backtests/<backtest-id>/report.html" in operations
+    assert "--notifications" not in manual_command
+    assert "does not load notification configuration or send\nnotifications" in manual_command
 
 
 def test_schema_uses_json_validation_supported_by_the_container_sqlite() -> None:

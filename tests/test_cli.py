@@ -22,8 +22,9 @@ def _cli(*args: str) -> subprocess.CompletedProcess[str]:
 
 
 def test_actual_cli_accepts_implemented_strategy_before_bootstrapping_database(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setenv("DATA_FOLDER", str(tmp_path))
     validated = _cli(
         "validate",
         "--strategy",
@@ -36,14 +37,97 @@ def test_actual_cli_accepts_implemented_strategy_before_bootstrapping_database(
     assert validated.returncode == 0, validated.stderr
     assert json.loads(validated.stdout) == {"status": "VALID"}
 
-    database = tmp_path / "runtime.sqlite3"
-    bootstrap = _cli("database", "bootstrap", "--database", str(database))
+    bootstrap = _cli("database", "bootstrap")
     assert bootstrap.returncode == 0, bootstrap.stderr
     assert json.loads(bootstrap.stdout) == {"schema_version": 1, "status": "READY", "tables": 5}
 
-    status = _cli("database", "status", "--database", str(database))
+    status = _cli("database", "status")
     assert status.returncode == 0, status.stderr
     assert json.loads(status.stdout)["runs"] == 0
+
+
+def test_cli_uses_global_runtime_authority_and_sync_range_accepts_only_dates() -> None:
+    from smc_ict.cli import _parser
+
+    parser = _parser()
+    sync = parser.parse_args(
+        [
+            "market-data",
+            "sync-range",
+            "--start",
+            "2026-01-01T00:00:00Z",
+            "--end",
+            "2026-01-01T00:01:00Z",
+        ]
+    )
+    assert vars(sync) == {
+        "command": "market-data",
+        "market_data_command": "sync-range",
+        "start": "2026-01-01T00:00:00Z",
+        "end": "2026-01-01T00:01:00Z",
+    }
+
+    for command in (
+        ["database", "status", "--database", "other.sqlite3"],
+        ["run", "--strategy", "strategy.yaml", "--database", "other.sqlite3"],
+        ["run", "--strategy", "strategy.yaml", "--lock", "other.lock"],
+        ["scheduler-health", "--health-file", "other.ready"],
+        ["scheduler", "--schedule", "schedule.yaml", "--config-root", "other-config"],
+    ):
+        with pytest.raises(SystemExit):
+            parser.parse_args(command)
+
+
+def test_sync_range_cli_delegates_to_the_shared_application_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from smc_ict import cli
+
+    calls: list[tuple[str, str]] = []
+
+    class Receipt:
+        def canonical_dict(self) -> dict[str, object]:
+            return {"status": "SUCCEEDED", "provider": "fixture", "instruments": {}}
+
+    monkeypatch.setattr(
+        cli,
+        "sync_historical_range",
+        lambda *, start, end: (calls.append((start, end)), Receipt())[1],
+        raising=False,
+    )
+
+    payload = cli._execute(
+        cli._parser().parse_args(
+            [
+                "market-data",
+                "sync-range",
+                "--start",
+                "2026-01-01T00:00:00Z",
+                "--end",
+                "2026-01-01T00:01:00Z",
+            ]
+        )
+    )
+
+    assert payload == {"status": "SUCCEEDED", "provider": "fixture", "instruments": {}}
+    assert calls == [("2026-01-01T00:00:00Z", "2026-01-01T00:01:00Z")]
+
+
+def test_run_requires_the_global_config_folder_before_composition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from smc_ict import cli
+
+    monkeypatch.setenv("DATA_FOLDER", str(tmp_path))
+    monkeypatch.delenv("CONFIG_FOLDER", raising=False)
+    monkeypatch.setattr(
+        cli,
+        "run_once",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("run composed without authority")),
+    )
+
+    with pytest.raises(ValueError, match="CONFIG_FOLDER is required"):
+        cli._execute(cli._parser().parse_args(["run", "--strategy", "strategy.yaml"]))
 
 
 def test_notifier_test_is_a_redacted_dry_run_without_delivery(tmp_path: Path) -> None:
@@ -176,7 +260,11 @@ def test_write_makes_a_complete_json_line_visible_while_child_remains_alive() ->
         process.communicate(timeout=5)
 
 
-def test_scheduler_cli_reports_readiness_and_shuts_down_gracefully(tmp_path: Path) -> None:
+def test_scheduler_cli_reports_readiness_and_shuts_down_gracefully(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DATA_FOLDER", str(tmp_path))
+    monkeypatch.setenv("CONFIG_FOLDER", str(tmp_path))
     schedule = tmp_path / "schedule.yaml"
     schedule.write_text(
         "schedule:\n  enabled: false\n  timezone: UTC\n  jobs: []\n",
@@ -190,10 +278,6 @@ def test_scheduler_cli_reports_readiness_and_shuts_down_gracefully(tmp_path: Pat
             "scheduler",
             "--schedule",
             str(schedule),
-            "--database",
-            str(tmp_path / "runtime.sqlite3"),
-            "--lock",
-            str(tmp_path / "engine.lock"),
         ],
         text=True,
         stdout=subprocess.PIPE,
@@ -225,10 +309,6 @@ def test_scheduler_cli_has_no_complete_job_retry_policy() -> None:
                 "scheduler",
                 "--schedule",
                 "schedule.yaml",
-                "--database",
-                "db.sqlite3",
-                "--lock",
-                "engine.lock",
                 "--retry-attempts",
                 "2",
             ]
