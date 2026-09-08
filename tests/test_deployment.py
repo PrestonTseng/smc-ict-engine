@@ -874,15 +874,13 @@ def test_documented_operator_commands_parse_with_global_runtime_authority() -> N
                 "run",
                 "--strategy",
                 "/strategies/source-aligned-research.yaml",
-                "--notifications",
-                "/config/notifications.yaml",
                 "--trigger",
                 "manual",
             ],
             {
                 "command": "run",
                 "strategy": "/strategies/source-aligned-research.yaml",
-                "notifications": "/config/notifications.yaml",
+                "notifications": None,
                 "trigger": "manual",
             },
         ),
@@ -995,6 +993,18 @@ def test_operator_docs_cover_immutable_backtest_workflow_and_failures() -> None:
         document = ROOT.joinpath("docs", filename).read_text(encoding="utf-8")
         for phrase in phrases:
             assert phrase in document
+
+
+def test_human_facing_runtime_paths_and_manual_notifications_match_compose() -> None:
+    design = (ROOT / "docs/deployment-design.html").read_text(encoding="utf-8")
+    operations = (ROOT / "docs/operations.md").read_text(encoding="utf-8")
+    manual_command = operations.split("## Run one manual receipt path", 1)[1].split("##", 1)[0]
+
+    assert "${DATA_FOLDER}/smc_ict.db" in design
+    assert "./data/smc_ict.db" not in design
+    assert "${DATA_FOLDER}/backtests/<backtest-id>/report.html" in operations
+    assert "--notifications" not in manual_command
+    assert "does not load notification configuration or send\nnotifications" in manual_command
 
 
 def test_schema_uses_json_validation_supported_by_the_container_sqlite() -> None:

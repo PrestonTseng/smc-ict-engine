@@ -58,14 +58,14 @@ service log and persisted run receipts.
 
 ## Run one manual receipt path
 
-This uses the same image, configuration, data bind, process lock, and Discord secret as the
-scheduler. It can contact the configured provider and destination; use it only during an approved
-operator window.
+This uses the same image, configuration, data bind, and process lock as the scheduler. The manual
+service has no Discord secret. This command does not load notification configuration or send
+notifications. It can contact the configured provider. Use it only during an approved operator
+window.
 
 ```sh
 docker compose --profile manual run --rm manual run \
   --strategy /strategies/source-aligned-research.yaml \
-  --notifications /config/notifications.yaml \
   --trigger manual
 ```
 
@@ -139,4 +139,6 @@ docker compose --profile manual run --rm manual \
 docker compose start engine
 ```
 
-Open `data/backtests/<backtest-id>/report.html` locally. Treat JSON and JSONL as the canonical audit evidence. Do not edit an existing result; change the scenario name/version or assumptions to produce a new identity.
+Open `${DATA_FOLDER}/backtests/<backtest-id>/report.html` locally. Treat JSON and JSONL as the
+canonical audit evidence. Do not edit an existing result. Change the scenario version or assumptions
+to produce a new identity.

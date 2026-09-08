@@ -46,8 +46,8 @@ def probe(report: Path, *, chromium_executable: Path | None = None) -> dict[str,
         from playwright.sync_api import sync_playwright  # type: ignore[import-not-found]
     except ImportError as error:
         raise RuntimeError(
-            "Playwright is required; run with `uvx --from playwright python "
-            "scripts/probe_backtest_report.py ...`"
+            "Playwright is required; run `uv sync --locked --all-groups`, then use "
+            "`uv run --locked python scripts/probe_backtest_report.py ...`"
         ) from error
 
     console_errors: list[str] = []

@@ -47,6 +47,23 @@ def test_browser_probe_exposes_a_dependency_free_help_path() -> None:
     assert "--chromium-executable" in completed.stdout
 
 
+def test_documented_report_probe_uses_the_locked_playwright_client() -> None:
+    root = Path(__file__).parents[1]
+    readme = (root / "README.md").read_text(encoding="utf-8")
+    probe = (root / "scripts/probe_backtest_report.py").read_text(encoding="utf-8")
+    project = (root / "pyproject.toml").read_text(encoding="utf-8")
+    ci = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+
+    assert '"playwright==1.62.0"' in project
+    assert "uvx" not in readme
+    assert "uvx" not in probe
+    assert "uv run --locked playwright install chromium" in readme
+    assert "UV_NO_NETWORK=1 uv run --locked python scripts/probe_backtest_report.py" in readme
+    assert "uv run --locked playwright install --with-deps chromium" in readme
+    assert "uv run playwright install --with-deps chromium" in ci
+    assert "uv run --locked python scripts/probe_backtest_report.py ..." in probe
+
+
 def test_browser_probe_bounds_sparse_filter_evaluation_decoding(tmp_path: Path) -> None:
     result_path = tmp_path / "benchmark.json"
     generated = subprocess.run(

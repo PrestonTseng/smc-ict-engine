@@ -4,24 +4,34 @@ These examples describe composition, not formulas. They are not a profitability 
 
 ## Context, setup, and execution
 
-Give each timeframe a logical role. A `context` role can describe the broad market state. A `setup` role can identify a location worth observing. An `execution` role can wait for a more precise event. Configuration owns the timeframe bound to each role, so changing a timeframe does not change graph code.
+Each timeframe has a logical role. A `regime` role describes the broad market state. A `context`
+role identifies a location to observe. An `execution` role waits for a more precise event.
 
 Every role receives completed bars only. A configured plugin can read its role's bars and the observations from its declared dependencies. It cannot read another plugin's hidden state. The graph stops invalid configuration before market or database access.
 
-The checked-in research strategy currently assigns swing structure to `4h`, equal-high/low and order-block context to `1h`, and the ordered liquidity, market-structure, fair-value-gap, and risk-level chain to `15m`. This composition is a logical approximation of prior operator intent, not an equivalence claim about any old project or execution flow.
+The checked-in strategy assigns swing structure to `4h`. It assigns equal-high/low and order-block
+context to `1h`. It assigns the ordered liquidity, market-structure, fair-value-gap, and risk-level
+chain to `15m`. This composition is not an equivalence claim about another execution flow.
 
-A human author can arrange a graph like this:
+The checked-in strategy uses this fixed graph:
 
-1. A context observation has no dependency.
-2. A setup observation depends on context.
-3. An execution observation depends on setup.
-4. A project-owned risk plugin depends on the observations that provide candidate levels.
+1. `smc.swing_structure` has no dependency.
+2. `smc.equal_high_low` depends on `smc.swing_structure`.
+3. `smc.order_block` depends on `smc.swing_structure`.
+4. `ict.clustered_liquidity` depends on `smc.equal_high_low`.
+5. `ict.market_structure` depends on `ict.clustered_liquidity`.
+6. `ict.fair_value_gap` depends on `ict.market_structure`.
+7. `project.risk_levels` depends on `ict.clustered_liquidity` and `ict.fair_value_gap`.
 
-The YAML file owns plugin IDs, dependencies, order, and parameters. The engine core owns none of those choices.
+The YAML file records plugin IDs, dependencies, order, and parameters. The strict loader requires
+the registered V1 role, timeframe, and dependency contract for each plugin. V1 does not support
+arbitrary graph rearrangement.
 
-## Independent confirmation roles
+## Configuration changes
 
-A strategy can also use two logical roles that confirm different facts without implying a fixed timeframe hierarchy. Both observations can feed a later decision gate. Deleting one configured instance removes only that node and any dependency that names it; changing one instance's parameters changes its parameter and graph hashes without changing unrelated plugin code.
+Configuration owns supported plugin parameters, instruments, strategy metadata, and history. Changes
+to these values update the related configuration hashes. An author cannot delete a required
+dependency, change a fixed role or timeframe, or add an unknown plugin ID.
 
 ## Risk boundary
 
