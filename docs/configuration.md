@@ -19,6 +19,13 @@ destination reads `/run/secrets/discord_webhook_url`; Compose mounts that value 
 host file `secrets/discord_webhook_url`. The destination subscribes to all five neutral engine
 events and uses the native `discord_webhook` adapter.
 
+Discord presents those neutral events as bounded human-readable cards. Lifecycle start, completion,
+and failure cards are delivered separately. Decision and no-decision cards batch only for the same
+run and closed bar, with at most eight input events per message. Repeated no-decision results may be
+summarized with deterministic instrument, failed-rule, `NO_TRADE`, and `UNAVAILABLE` counts. Visible
+times use Discord timestamp markup and UTC ISO embed timestamps; full run and decision identifiers
+remain in persisted evidence rather than the primary card.
+
 Copy `.env.example` to a local ignored `.env` only when your Compose workflow loads that file. It
 contains only the required absolute `DATA_FOLDER` configuration. Do not commit resolved values.
 

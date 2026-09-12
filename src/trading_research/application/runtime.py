@@ -276,6 +276,7 @@ class EngineRunner:
                             "status": "RUNNING",
                             "instrument_count": len(strategy.instruments),
                             "evaluation_time_ms": latest_open + 59_999,
+                            "event_time_ms": started,
                         },
                     ),
                 )
@@ -321,6 +322,7 @@ class EngineRunner:
                 False,
                 error,
                 evaluation_time_ms=latest_open + 59_999,
+                event_time_ms=completed,
             )
             return RunReceipt(
                 run_id,
@@ -341,6 +343,7 @@ class EngineRunner:
                 True,
                 None,
                 evaluation_time_ms=latest_open + 59_999,
+                event_time_ms=completed,
             )
         )
         warning = (
@@ -368,6 +371,7 @@ class EngineRunner:
         error: str | None,
         *,
         evaluation_time_ms: int,
+        event_time_ms: int,
     ) -> tuple[str, ...]:
         if self._event_sink is None:
             return ()
@@ -388,6 +392,7 @@ class EngineRunner:
             "status": "SUCCEEDED" if succeeded else "FAILED",
             "instrument_count": len(config.strategy.instruments),
             "decision_count": len(decisions),
+            "event_time_ms": event_time_ms,
         }
         if error is not None:
             lifecycle_payload["error_category"] = error.partition(":")[0][:64]

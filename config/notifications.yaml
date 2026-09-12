@@ -15,7 +15,7 @@ notifications:
         window_seconds: 300
         key_fields: [event_type, run_id, instrument_id]
       batching:
-        maximum_events: 10
+        maximum_events: 8
         flush_seconds: 2
       redaction:
         headers: [authorization, cookie, set-cookie]

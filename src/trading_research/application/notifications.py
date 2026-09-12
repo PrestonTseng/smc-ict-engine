@@ -78,6 +78,12 @@ class NotificationRouter:
             for event in events:
                 if event.event_type not in destination.enabled_events:
                     continue
+                if event.event_type in {"run_started", "run_succeeded", "run_failed"}:
+                    receipts.extend(self._flush_destination(destination_id, destination))
+                    receipts.append(
+                        self._deliver_to_destination(destination_id, destination, event)
+                    )
+                    continue
                 now = self._clock_seconds()
                 deduplication_id = self._deduplication_id(destination_id, destination, event)
                 previous = self._delivered_at(destination_id, deduplication_id)
@@ -93,6 +99,11 @@ class NotificationRouter:
                     continue
                 deadline = self._deadlines.get(destination_id)
                 if deadline is not None and now >= deadline:
+                    receipts.extend(self._flush_destination(destination_id, destination))
+                pending = self._pending.get(destination_id)
+                if pending and self._terminal_boundary(pending[0]) != self._terminal_boundary(
+                    event
+                ):
                     receipts.extend(self._flush_destination(destination_id, destination))
                 pending = self._pending.setdefault(destination_id, [])
                 if not pending:
@@ -112,6 +123,10 @@ class NotificationRouter:
         if not receipts:
             return RoutingReceipt("NO_MATCH", ())
         return self._routing_receipt(receipts)
+
+    @staticmethod
+    def _terminal_boundary(event: NotificationEvent) -> tuple[str, object]:
+        return event.run_id, event.payload.get("closed_bar_time_ms")
 
     def _flush_destination(
         self, destination_id: str, destination: NotificationDestination

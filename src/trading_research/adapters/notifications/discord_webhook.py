@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import re
+from collections import Counter
 from collections.abc import Callable, Mapping
+from datetime import UTC, datetime
 from time import sleep, time
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -14,27 +17,15 @@ from trading_research.configuration.models import NotificationDestination
 from .generic_webhook import GenericWebhookNotifier
 
 _USER_AGENT = "trading-research-engine/0.2.0 discord-webhook"
-_EVENT_PRESENTATION = {
-    "run_started": ("Run started", 0x3498DB),
-    "run_succeeded": ("Run succeeded", 0x2ECC71),
-    "run_failed": ("Run failed", 0xE74C3C),
-    "decision_found": ("Decision ready", 0x9B59B6),
-    "no_decision": ("No decision", 0x95A5A6),
+_LIFECYCLE_PRESENTATION = {
+    "run_started": ("▶ Evaluation started", 0x3498DB),
+    "run_succeeded": ("✓ Evaluation complete", 0x2ECC71),
+    "run_failed": ("⚠ Evaluation failed", 0xE74C3C),
 }
-_FIELD_LABELS = {
-    "closed_bar_time_ms": "Closed bar time (ms)",
-    "decision_count": "Decision count",
-    "decision_id": "Decision ID",
-    "direction": "Direction",
-    "entry": "Entry",
-    "error_category": "Error category",
-    "evaluation_time_ms": "Evaluation time (ms)",
-    "first_failed_signal": "First failed signal",
-    "instrument_count": "Instrument count",
-    "reward_risk": "Reward/risk",
-    "status": "Status",
-    "stop": "Stop",
-    "target": "Target",
+_LIFECYCLE_STATUS = {
+    "run_started": "RUNNING",
+    "run_succeeded": "SUCCEEDED",
+    "run_failed": "FAILED",
 }
 
 
@@ -47,43 +38,248 @@ def _truncate(value: object, maximum: int) -> str:
     return text[: maximum - 1] + "…"
 
 
-def _embed(event: NotificationEvent, *, character_budget: int) -> dict[str, object]:
-    title, color = _EVENT_PRESENTATION[event.event_type]
-    values: list[tuple[str, object]] = [
-        ("Run ID", event.run_id),
-        ("Strategy", event.strategy_id),
-    ]
-    if event.instrument_id is not None:
-        values.append(("Instrument", event.instrument_id))
-    values.extend(
-        (_FIELD_LABELS.get(name, name.replace("_", " ").title()), value)
-        for name, value in sorted(event.payload.items())
-        if value is not None
-    )
-    maximum_fields = min(25, max(3, character_budget // 48))
-    values = values[:maximum_fields]
-    names = [_truncate(name, 24) for name, _value in values]
-    value_budget = max(len(values), character_budget - len(title) - sum(map(len, names)))
-    value_limit = max(1, min(1_024, value_budget // len(values)))
+def _prefix(value: object) -> str:
+    return str(value)[:8]
+
+
+def _timestamp(milliseconds: int) -> str:
+    value = datetime.fromtimestamp(milliseconds / 1_000, UTC)
+    return value.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _safe_error_category(value: object) -> str:
+    if type(value) is str and re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", value):
+        return value
+    return "Failure details unavailable"
+
+
+def _exact_decision_value(value: object) -> str:
+    if type(value) is not str:
+        return "Unavailable"
+    if len(value) > 64:
+        raise ValueError("exact decision value exceeds 64 characters")
+    return value
+
+
+def _lifecycle_embed(event: NotificationEvent) -> dict[str, object]:
+    title, color = _LIFECYCLE_PRESENTATION[event.event_type]
+    status = _LIFECYCLE_STATUS[event.event_type]
+    event_time_ms = event.payload.get("event_time_ms")
     fields = [
-        {"name": name, "value": _truncate(value, value_limit), "inline": True}
-        for name, (_label, value) in zip(names, values, strict=True)
+        {"name": "Strategy", "value": _truncate(event.strategy_id, 128), "inline": True},
+        {
+            "name": "Instruments",
+            "value": _truncate(event.payload.get("instrument_count", "Unknown"), 32),
+            "inline": True,
+        },
     ]
-    return {"title": title, "color": color, "fields": fields}
+    if event.event_type == "run_failed":
+        fields.append(
+            {
+                "name": "Error category",
+                "value": _safe_error_category(event.payload.get("error_category")),
+                "inline": False,
+            }
+        )
+    embed: dict[str, object] = {
+        "title": title,
+        "description": f"**{status}** · Evaluation lifecycle update.",
+        "color": color,
+        "fields": fields,
+        "footer": {"text": f"Run {_prefix(event.run_id)} · Schema v{event.payload_schema_version}"},
+    }
+    if type(event_time_ms) is int:
+        seconds = event_time_ms // 1_000
+        fields.append(
+            {
+                "name": "Event time",
+                "value": f"<t:{seconds}:F> · <t:{seconds}:R>",
+                "inline": False,
+            }
+        )
+        embed["timestamp"] = _timestamp(event_time_ms)
+    return embed
 
 
-def format_discord_payload(events: tuple[NotificationEvent, ...]) -> dict[str, object]:
+def _decision_embed(event: NotificationEvent) -> dict[str, object]:
+    direction = event.payload.get("direction")
+    direction_label = direction if direction in {"LONG", "SHORT"} else "READY"
+    instrument = event.instrument_id or "Unknown instrument"
+    closed_bar_time_ms = event.payload.get("closed_bar_time_ms")
+    fields = [
+        {
+            "name": label,
+            "value": _exact_decision_value(event.payload.get(key)),
+            "inline": True,
+        }
+        for label, key in (
+            ("Entry", "entry"),
+            ("Stop", "stop"),
+            ("Target", "target"),
+            ("Reward/risk", "reward_risk"),
+        )
+    ]
+    fields.extend(
+        (
+            {"name": "Strategy", "value": _truncate(event.strategy_id, 128), "inline": False},
+            {"name": "Reason", "value": "Setup criteria satisfied", "inline": False},
+        )
+    )
+    embed: dict[str, object] = {
+        "title": _truncate(f"🎯 {direction_label} setup · {instrument}", 256),
+        "description": "**READY** · Setup criteria satisfied.",
+        "color": 0xF1C40F,
+        "fields": fields,
+        "footer": {
+            "text": (
+                f"Run {_prefix(event.run_id)} · Decision "
+                f"{_prefix(event.payload.get('decision_id', 'unknown'))} · "
+                f"Schema v{event.payload_schema_version}"
+            )
+        },
+    }
+    if type(closed_bar_time_ms) is int:
+        fields.append(
+            {
+                "name": "Closed bar",
+                "value": f"<t:{closed_bar_time_ms // 1_000}:F>",
+                "inline": False,
+            }
+        )
+        embed["timestamp"] = _timestamp(closed_bar_time_ms)
+    return embed
+
+
+def _safe_reason(value: object) -> str:
+    if type(value) is str and re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", value):
+        return value
+    return "Reason unavailable"
+
+
+def _no_decision_embed(event: NotificationEvent) -> dict[str, object]:
+    status = event.payload.get("status")
+    status_label = status if status in {"NO_TRADE", "UNAVAILABLE"} else "NO_SETUP"
+    explanation = (
+        "No configured setup passed."
+        if status_label == "NO_TRADE"
+        else "Required evidence was unavailable."
+        if status_label == "UNAVAILABLE"
+        else "No setup result was available."
+    )
+    instrument = event.instrument_id or "Unknown instrument"
+    reason = _safe_reason(event.payload.get("first_failed_signal"))
+    closed_bar_time_ms = event.payload.get("closed_bar_time_ms")
+    fields = [
+        {"name": "Strategy", "value": _truncate(event.strategy_id, 128), "inline": False},
+        {"name": "Reason", "value": reason, "inline": False},
+    ]
+    embed: dict[str, object] = {
+        "title": _truncate(f"No setup · {instrument}", 256),
+        "description": f"**{status_label}** · {explanation}",
+        "color": 0x95A5A6,
+        "fields": fields,
+        "footer": {
+            "text": (
+                f"Run {_prefix(event.run_id)} · Decision "
+                f"{_prefix(event.payload.get('decision_id', 'unknown'))} · "
+                f"Schema v{event.payload_schema_version}"
+            )
+        },
+    }
+    if type(closed_bar_time_ms) is int:
+        fields.append(
+            {
+                "name": "Closed bar",
+                "value": f"<t:{closed_bar_time_ms // 1_000}:F>",
+                "inline": False,
+            }
+        )
+        embed["timestamp"] = _timestamp(closed_bar_time_ms)
+    return embed
+
+
+def _can_aggregate_no_decisions(events: tuple[NotificationEvent, ...]) -> bool:
+    first = events[0]
+    boundary = (first.run_id, first.strategy_id, first.payload.get("closed_bar_time_ms"))
+    return len(events) > 1 and all(
+        event.event_type == "no_decision"
+        and (event.run_id, event.strategy_id, event.payload.get("closed_bar_time_ms")) == boundary
+        for event in events
+    )
+
+
+def _no_decision_summary(events: tuple[NotificationEvent, ...]) -> dict[str, object]:
+    first = events[0]
+    statuses = Counter(
+        status if status in {"NO_TRADE", "UNAVAILABLE"} else "NO_SETUP"
+        for status in (event.payload.get("status") for event in events)
+    )
+    description = " · ".join(
+        f"**{status}** {statuses[status]}"
+        for status in ("NO_TRADE", "UNAVAILABLE", "NO_SETUP")
+        if statuses[status]
+    )
+    rules = Counter(_safe_reason(event.payload.get("first_failed_signal")) for event in events)
+    rule_summary = "\n".join(
+        f"{rule} \N{MULTIPLICATION SIGN}{count}" for rule, count in sorted(rules.items())
+    )
+    instruments = "\n".join(sorted(event.instrument_id or "Unknown instrument" for event in events))
+    closed_bar_time_ms = first.payload.get("closed_bar_time_ms")
+    fields = [
+        {"name": "Failed rules", "value": _truncate(rule_summary, 180), "inline": False},
+        {"name": "Instruments", "value": _truncate(instruments, 180), "inline": False},
+        {"name": "Strategy", "value": _truncate(first.strategy_id, 96), "inline": False},
+    ]
+    embed: dict[str, object] = {
+        "title": f"No setup · {len(events)} instruments",
+        "description": description,
+        "color": 0x95A5A6,
+        "fields": fields,
+        "footer": {"text": f"Run {_prefix(first.run_id)} · Schema v{first.payload_schema_version}"},
+    }
+    if type(closed_bar_time_ms) is int:
+        fields.append(
+            {
+                "name": "Closed bar",
+                "value": f"<t:{closed_bar_time_ms // 1_000}:F>",
+                "inline": False,
+            }
+        )
+        embed["timestamp"] = _timestamp(closed_bar_time_ms)
+    return embed
+
+
+def _embed(event: NotificationEvent) -> dict[str, object]:
+    if event.event_type in {"run_started", "run_succeeded", "run_failed"}:
+        return _lifecycle_embed(event)
+    if event.event_type == "decision_found":
+        return _decision_embed(event)
+    if event.event_type == "no_decision":
+        return _no_decision_embed(event)
+    raise ValueError("unsupported Discord event type")
+
+
+def format_discord_payload(
+    events: tuple[NotificationEvent, ...], *, part_number: int | None = None
+) -> dict[str, object]:
     """Create a native Discord body without resolving or exposing an endpoint."""
 
     if not events:
         raise ValueError("Discord payload requires at least one event")
-    if len(events) > 10:
-        raise ValueError("Discord payload supports at most 10 events")
-    character_budget = 6_000 // len(events)
-    return {
+    if len(events) > 8:
+        raise ValueError("Discord payload supports at most 8 events")
+    embeds = (
+        [_no_decision_summary(events)]
+        if _can_aggregate_no_decisions(events)
+        else [_embed(event) for event in events]
+    )
+    payload: dict[str, object] = {
         "allowed_mentions": {"parse": []},
-        "embeds": [_embed(event, character_budget=character_budget) for event in events],
+        "embeds": embeds,
     }
+    if part_number is not None:
+        payload["content"] = f"Evaluation results · Part {part_number}"
+    return payload
 
 
 class DiscordWebhookNotifier:
@@ -107,6 +303,7 @@ class DiscordWebhookNotifier:
         self._opener = opener
         self._sleeper = sleeper
         self._clock_seconds = clock_seconds
+        self._terminal_parts: dict[tuple[str, object], int] = {}
 
     def deliver(self, event: NotificationEvent) -> DeliveryReceipt:
         return self._deliver((event,))
@@ -117,8 +314,15 @@ class DiscordWebhookNotifier:
         return self._deliver(events)
 
     def _deliver(self, events: tuple[NotificationEvent, ...]) -> DeliveryReceipt:
+        part_number: int | None = None
+        if all(event.event_type in {"decision_found", "no_decision"} for event in events):
+            boundary = (events[0].run_id, events[0].payload.get("closed_bar_time_ms"))
+            part_number = self._terminal_parts.get(boundary, 0) + 1
+            self._terminal_parts[boundary] = part_number
         body = json.dumps(
-            format_discord_payload(events), sort_keys=True, separators=(",", ":")
+            format_discord_payload(events, part_number=part_number),
+            sort_keys=True,
+            separators=(",", ":"),
         ).encode()
         event_id = GenericWebhookNotifier._hash(
             [(event.event_type, event.run_id, event.instrument_id) for event in events]

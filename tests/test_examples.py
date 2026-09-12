@@ -64,7 +64,7 @@ def test_checked_in_examples_cross_real_loader_boundaries() -> None:
     )
     assert destination.endpoint.kind == "file"
     assert destination.endpoint.name == "/run/secrets/discord_webhook_url"
-    assert destination.batching.maximum_events == 10
+    assert destination.batching.maximum_events == 8
 
     assert (
         load_strategy(ROOT / "strategies/source-aligned-research.yaml").name

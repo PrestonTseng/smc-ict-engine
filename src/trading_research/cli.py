@@ -12,6 +12,7 @@ import sys
 from collections.abc import Sequence
 from threading import Event
 
+from trading_research.adapters.notifications.discord_webhook import format_discord_payload
 from trading_research.adapters.persistence.sqlite import SQLiteRepository
 from trading_research.application.ports.notifications import NotificationEvent
 from trading_research.composition.runtime_services import (
@@ -176,19 +177,23 @@ def _execute(args: argparse.Namespace) -> dict[str, object]:
         canonical_payload = json.dumps(
             dict(event.payload), sort_keys=True, separators=(",", ":"), allow_nan=False
         ).encode()
-        return {
+        destinations = sorted(
+            destination_id
+            for destination_id, destination in config.destinations.items()
+            if config.enabled
+            and destination.enabled
+            and event.event_type in destination.enabled_events
+        )
+        result: dict[str, object] = {
             "status": "DRY_RUN",
             "delivery_attempted": False,
-            "destinations": sorted(
-                destination_id
-                for destination_id, destination in config.destinations.items()
-                if config.enabled
-                and destination.enabled
-                and event.event_type in destination.enabled_events
-            ),
+            "destinations": destinations,
             "event": event.event_type,
             "payload_sha256": hashlib.sha256(canonical_payload).hexdigest(),
         }
+        if any(config.destinations[item].adapter == "discord_webhook" for item in destinations):
+            result["discord_preview"] = format_discord_payload((event,))
+        return result
     if args.command == "scheduler-health":
         payload = json.loads(RuntimePaths.from_environ().health.read_text(encoding="utf-8"))
         if payload.get("status") != "READY" or type(payload.get("pid")) is not int:

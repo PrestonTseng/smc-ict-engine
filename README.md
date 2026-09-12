@@ -109,8 +109,13 @@ uv run trading-research notifier-test \
   --event run_succeeded \
   --run-id fixture-run \
   --strategy-id source-aligned-research \
-  --payload '{"decision_count":0}'
+  --payload '{"status":"SUCCEEDED","event_time_ms":1725000000123,"instrument_count":2,"decision_count":0}'
 ```
+
+For a matching Discord destination, the dry-run response includes the exact native `discord_preview`
+card while keeping `delivery_attempted` false. It does not resolve the webhook secret or contact an
+endpoint. Lifecycle cards are sent separately; terminal setup/no-setup results batch only within one
+run and closed-bar boundary.
 
 Run a manual receipt path:
 

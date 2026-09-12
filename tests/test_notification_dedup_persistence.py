@@ -140,9 +140,14 @@ def test_mixed_duplicate_and_new_batch_delivers_only_novel_events(tmp_path: Path
     assert receipt.outcome == "ALL_SUCCESS"
     assert calls == [
         ("only", ("decision_found",)),
-        ("only", ("no_decision", "run_succeeded")),
+        ("only", ("no_decision",)),
+        ("only", ("run_succeeded",)),
     ]
-    assert [item.outcome for item in receipt.receipts] == ["DEDUPLICATED", "SUCCESS"]
+    assert [item.outcome for item in receipt.receipts] == [
+        "DEDUPLICATED",
+        "SUCCESS",
+        "SUCCESS",
+    ]
 
 
 def test_durable_deduplication_is_destination_scoped(tmp_path: Path) -> None:

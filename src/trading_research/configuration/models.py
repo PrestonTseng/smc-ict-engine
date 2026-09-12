@@ -455,7 +455,7 @@ class NotificationDestination(BaseModel):
             raise ValueError("enabled destination requires events")
         if not self.enabled and self.enabled_events:
             raise ValueError("disabled destination requires an empty list")
-        maximum = 10 if self.adapter == "discord_webhook" else 1000
+        maximum = 8 if self.adapter == "discord_webhook" else 1000
         if self.batching.maximum_events > maximum:
             value = self.batching.maximum_events
             raise ValueError(f"batching.maximum_events: expected 1..{maximum}, got {value}")

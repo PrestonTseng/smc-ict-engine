@@ -85,10 +85,14 @@ uv run trading-research notifier-test \
   --event run_succeeded \
   --run-id fixture-run \
   --strategy-id source-aligned-research \
-  --payload '{"decision_count":0}'
+  --payload '{"status":"SUCCEEDED","event_time_ms":1725000000123,"instrument_count":2,"decision_count":0}'
 ```
 
-This command validates the notification configuration, event filters, and scalar payload. It does not resolve a secret or contact an endpoint.
+This command validates the notification configuration, event filters, and scalar payload. When the
+event matches a Discord destination, it also returns the exact native `discord_preview`: human status
+title and text, Discord `<t:...>` time, canonical UTC embed timestamp, and shortened identifiers. It
+does not resolve a secret or contact an endpoint. The fixture timestamp is illustrative; use the
+truthful lifecycle event time or closed-bar time for the event being previewed.
 
 ## Disable a schedule
 

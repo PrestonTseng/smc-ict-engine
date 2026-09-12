@@ -420,6 +420,7 @@ def test_manual_and_scheduled_runs_share_one_deterministic_engine_path(tmp_path:
         "status": "RUNNING",
         "instrument_count": 1,
         "evaluation_time_ms": 299_999,
+        "event_time_ms": 300_000,
     }
     assert dict(manual_events[1].payload) == {
         "status": "UNAVAILABLE",
@@ -434,6 +435,7 @@ def test_manual_and_scheduled_runs_share_one_deterministic_engine_path(tmp_path:
         "status": "SUCCEEDED",
         "instrument_count": 1,
         "decision_count": 1,
+        "event_time_ms": 300_000,
     }
     stored_run = manual_repository.load_run(manual.run_id)
     assert stored_run.status == "SUCCEEDED"

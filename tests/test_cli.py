@@ -160,6 +160,70 @@ def test_notifier_test_is_a_redacted_dry_run_without_delivery(tmp_path: Path) ->
     }
 
 
+def test_notifier_test_includes_human_discord_preview_without_resolving_secret(
+    tmp_path: Path,
+) -> None:
+    notifications = tmp_path / "notifications.yaml"
+    notifications.write_text(
+        """notifications:
+  enabled: true
+  destinations:
+    discord_preview:
+      adapter: discord_webhook
+      enabled: true
+      enabled_events: [run_succeeded]
+      endpoint: {env: MUST_NOT_BE_RESOLVED}
+      timeout_seconds: 1
+      retries: {maximum_attempts: 1, backoff_seconds: []}
+      deduplication: {window_seconds: 1, key_fields: [event_type, run_id]}
+      batching: {maximum_events: 1, flush_seconds: 1}
+      redaction: {headers: [authorization], query_parameters: [token]}
+      failure_policy: warning
+""",
+        encoding="utf-8",
+    )
+
+    result = _cli(
+        "notifier-test",
+        "--notifications",
+        str(notifications),
+        "--event",
+        "run_succeeded",
+        "--run-id",
+        "1234567890abcdef",
+        "--strategy-id",
+        "fixture-strategy",
+        "--payload",
+        '{"status":"SUCCEEDED","event_time_ms":1725000000123,"instrument_count":2}',
+    )
+
+    assert result.returncode == 0, result.stderr
+    output = json.loads(result.stdout)
+    assert output["destinations"] == ["discord_preview"]
+    assert output["delivery_attempted"] is False
+    assert output["discord_preview"] == {
+        "allowed_mentions": {"parse": []},
+        "embeds": [
+            {
+                "color": 0x2ECC71,
+                "description": "**SUCCEEDED** · Evaluation lifecycle update.",
+                "fields": [
+                    {"inline": True, "name": "Strategy", "value": "fixture-strategy"},
+                    {"inline": True, "name": "Instruments", "value": "2"},
+                    {
+                        "inline": False,
+                        "name": "Event time",
+                        "value": "<t:1725000000:F> · <t:1725000000:R>",
+                    },
+                ],
+                "footer": {"text": "Run 12345678 · Schema v1"},
+                "timestamp": "2024-08-30T06:40:00.123Z",
+                "title": "✓ Evaluation complete",
+            }
+        ],
+    }
+
+
 def test_notifier_test_rejects_a_nested_payload_before_secret_resolution(tmp_path: Path) -> None:
     notifications = tmp_path / "notifications.yaml"
     notifications.write_text(
