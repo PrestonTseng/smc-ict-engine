@@ -1,4 +1,4 @@
-"""Exact schema-v1 SQLite persistence adapter."""
+"""Versioned SQLite persistence with truthful provenance migration."""
 
 from __future__ import annotations
 
@@ -27,8 +27,9 @@ from trading_research.application.receipt_contract import (
     SCHEDULER_FAILURE_OUTCOMES,
 )
 from trading_research.domain import ClosedCandle, hash_candles
+from trading_research.provenance import calculate_code_hash
 
-DDL = """
+V1_DDL = """
 CREATE TABLE candles_1m (
     provider_id TEXT NOT NULL,
     market_type TEXT NOT NULL,
@@ -173,6 +174,24 @@ CREATE TABLE decisions (
 ) STRICT;
 """
 
+DDL = V1_DDL.replace(
+    "    git_commit TEXT NOT NULL,\n",
+    "    git_commit TEXT,\n    code_hash TEXT,\n",
+).replace(
+    "    CHECK (length(git_commit)=40 AND git_commit NOT GLOB '*[^0-9a-f]*'),\n",
+    "    CHECK ((git_commit IS NOT NULL AND code_hash IS NULL "
+    "AND length(git_commit)=40 AND git_commit NOT GLOB '*[^0-9a-f]*')\n"
+    "        OR (git_commit IS NULL AND code_hash IS NOT NULL "
+    "AND length(code_hash)=64 AND code_hash NOT GLOB '*[^0-9a-f]*')),\n",
+)
+_RUNS_V2_DDL = (
+    "CREATE TABLE runs_v2 ("
+    + DDL.split("CREATE TABLE runs (", 1)[1].split("CREATE INDEX idx_runs_strategy_completed", 1)[0]
+)
+_RUNS_DDL = "CREATE TABLE runs ( " + DDL.split("CREATE TABLE runs (", 1)[1].split(
+    "CREATE INDEX idx_runs_strategy_completed", 1
+)[0].strip().removesuffix(";")
+
 _TABLES = {"candles_1m", "sync_state", "runs", "observations", "decisions"}
 _CANDLE_COLUMNS = (
     "provider_id",
@@ -202,6 +221,7 @@ _RUN_COLUMNS = (
     "market_type",
     "market_config_hash",
     "git_commit",
+    "code_hash",
     "data_start_open_ms",
     "data_end_close_ms",
     "data_hash",
@@ -237,7 +257,7 @@ class SQLiteSnapshotReader:
                     "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
                 )
             }
-        if version != 1 or tables != _TABLES:
+        if version not in {1, 2} or tables != _TABLES:
             raise RuntimeError("unsupported or malformed SQLite snapshot")
 
     def _connect(self) -> sqlite3.Connection:
@@ -338,30 +358,77 @@ class SQLiteRepository:
                 )
             }
             if version == 0 and not tables:
-                connection.executescript(f"{DDL}\nPRAGMA user_version=1;")
+                connection.executescript(f"{DDL}\nPRAGMA user_version=2;")
                 return
-            if version != 1 or tables != _TABLES:
+            if version not in {1, 2} or tables != _TABLES:
                 raise RuntimeError("unsupported or malformed SQLite schema")
+            if version == 1:
+                self._migrate_v1_to_v2(connection)
+                return
             run_columns = {
                 row[1] for row in connection.execute("PRAGMA table_info(runs)").fetchall()
             }
-            if "notification_dedup_json" not in run_columns:
+            if "code_hash" not in run_columns:
+                raise RuntimeError("unsupported or malformed SQLite schema")
+            runs_sql = cast(
+                str,
                 connection.execute(
-                    "ALTER TABLE runs ADD COLUMN notification_dedup_json TEXT NOT NULL "
-                    "DEFAULT '[]' CHECK (json_valid(notification_dedup_json))"
-                )
-            if "notification_outcomes_json" not in run_columns:
-                connection.execute(
-                    "ALTER TABLE runs ADD COLUMN notification_outcomes_json TEXT NOT NULL "
-                    "DEFAULT '[]' CHECK (json_valid(notification_outcomes_json))"
-                )
-            if "scheduler_outcome" not in run_columns:
-                connection.execute(
-                    "ALTER TABLE runs ADD COLUMN scheduler_outcome TEXT CHECK "
-                    "(scheduler_outcome IS NULL OR scheduler_outcome IN "
-                    "('SUCCEEDED','SUCCEEDED_WITH_WARNINGS','FAILED','OVERLAP_SKIPPED',"
-                    "'MAXIMUM_RUNTIME','SCHEDULER_SHUTDOWN','PROCESS_RESTART'))"
-                )
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='runs'"
+                ).fetchone()[0],
+            )
+            canonical_runs_sql = " ".join(runs_sql.split()).replace(
+                'CREATE TABLE "runs"', "CREATE TABLE runs", 1
+            )
+            if canonical_runs_sql != " ".join(_RUNS_DDL.split()):
+                raise RuntimeError("unsupported or malformed SQLite schema")
+
+    @staticmethod
+    def _migrate_v1_to_v2(connection: sqlite3.Connection) -> None:
+        run_columns = {row[1] for row in connection.execute("PRAGMA table_info(runs)").fetchall()}
+        required = set(_RUN_COLUMNS) - {"code_hash"}
+        if not required <= run_columns:
+            raise RuntimeError("unsupported or malformed SQLite schema")
+        notification_dedup = (
+            "notification_dedup_json" if "notification_dedup_json" in run_columns else "'[]'"
+        )
+        notification_outcomes = (
+            "notification_outcomes_json" if "notification_outcomes_json" in run_columns else "'[]'"
+        )
+        scheduler_outcome = "scheduler_outcome" if "scheduler_outcome" in run_columns else "NULL"
+        connection.execute("PRAGMA foreign_keys=OFF")
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            if connection.execute("PRAGMA foreign_key_check").fetchall():
+                raise RuntimeError("legacy SQLite schema has foreign-key violations")
+            connection.execute(_RUNS_V2_DDL)
+            connection.execute(
+                "INSERT INTO runs_v2 (rowid,run_id,status,started_at_ms,completed_at_ms,"
+                "strategy_name,strategy_version,strategy_config_hash,provider_id,market_type,"
+                "market_config_hash,git_commit,code_hash,data_start_open_ms,data_end_close_ms,"
+                "data_hash,notification_dedup_json,notification_outcomes_json,"
+                "scheduler_outcome,error) "
+                "SELECT rowid,run_id,status,started_at_ms,completed_at_ms,strategy_name,"
+                "strategy_version,strategy_config_hash,provider_id,market_type,market_config_hash,"
+                f"git_commit,NULL,data_start_open_ms,data_end_close_ms,data_hash,{notification_dedup},"
+                f"{notification_outcomes},{scheduler_outcome},error FROM runs"
+            )
+            connection.execute("DROP TABLE runs")
+            connection.execute("ALTER TABLE runs_v2 RENAME TO runs")
+            connection.execute(
+                "CREATE INDEX idx_runs_strategy_completed "
+                "ON runs(strategy_name, strategy_version, completed_at_ms DESC)"
+            )
+            connection.execute("PRAGMA user_version=2")
+            if connection.execute("PRAGMA foreign_key_check").fetchall():
+                raise RuntimeError("SQLite migration violated foreign keys")
+            if connection.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                raise RuntimeError("SQLite migration failed integrity check")
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.execute("PRAGMA foreign_keys=ON")
 
     def store_candle_page(
         self,
@@ -495,6 +562,8 @@ class SQLiteRepository:
         return None if row is None else SyncState(*tuple(row))
 
     def store_run(self, run: RunRecord) -> None:
+        if run.git_commit is not None and run.code_hash is None:
+            raise ValueError("new runs require code hash provenance")
         columns = tuple(run.__dataclass_fields__)
         values = tuple(getattr(run, column) for column in columns)
         connection = self._connect()
@@ -541,7 +610,8 @@ class SQLiteRepository:
                 provider_id="scheduler",
                 market_type="LINEAR_PERPETUAL",
                 market_config_hash=sha256(b"scheduler-attempt-v1").hexdigest(),
-                git_commit="0" * 40,
+                git_commit=None,
+                code_hash=calculate_code_hash(),
                 data_start_open_ms=aligned_start,
                 data_end_close_ms=aligned_start + 59_999,
                 data_hash=sha256(attempt_id.encode()).hexdigest(),

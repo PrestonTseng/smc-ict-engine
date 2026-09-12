@@ -140,7 +140,7 @@ def test_backtest_composition_runs_readiness_snapshot_offline_replay_and_report(
     table_counts_before = repository.database_status()
     monkeypatch.setenv("DATA_FOLDER", str(data))
     monkeypatch.setenv("CONFIG_FOLDER", str(config))
-    monkeypatch.setenv("SMC_ICT_GIT_COMMIT", "4" * 40)
+
     monkeypatch.setattr(
         runtime_services,
         "load_backtest",

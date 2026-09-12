@@ -64,7 +64,7 @@ class BacktestIdentity:
     strategy_hash: str
     market_data_hash: str
     candle_data_hash: str
-    git_commit: str
+    code_hash: str
     period: BacktestPeriod
     required_range: RequiredRange
     backtest_id: str
@@ -77,35 +77,33 @@ class BacktestIdentity:
         strategy_hash: str,
         market_data_hash: str,
         candle_data_hash: str,
-        git_commit: str,
+        code_hash: str,
         period: BacktestPeriod,
         required_range: RequiredRange,
     ) -> BacktestIdentity:
-        hashes = (scenario_hash, strategy_hash, market_data_hash, candle_data_hash)
+        hashes = (scenario_hash, strategy_hash, market_data_hash, candle_data_hash, code_hash)
         if any(
             len(value) != 64 or any(char not in "0123456789abcdef" for char in value)
             for value in hashes
         ):
             raise ValueError("identity inputs must contain lowercase SHA-256 hashes")
-        if len(git_commit) != 40 or any(char not in "0123456789abcdef" for char in git_commit):
-            raise ValueError("Git commit must be a lowercase 40-character hash")
         payload = {
             "scenario_hash": scenario_hash,
             "strategy_hash": strategy_hash,
             "market_data_hash": market_data_hash,
             "candle_data_hash": candle_data_hash,
-            "git_commit": git_commit,
+            "code_hash": code_hash,
             "period": period.canonical_dict(),
             "required_range": required_range.canonical_dict(),
         }
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        identity = sha256(b"backtest-v1\0" + encoded).hexdigest()
+        identity = sha256(b"backtest-v2\0" + encoded).hexdigest()
         return cls(
             scenario_hash,
             strategy_hash,
             market_data_hash,
             candle_data_hash,
-            git_commit,
+            code_hash,
             period,
             required_range,
             identity,

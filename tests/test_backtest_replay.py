@@ -224,18 +224,20 @@ def test_backtest_identity_hashes_every_immutable_input() -> None:
         strategy_hash="b" * 64,
         market_data_hash="c" * 64,
         candle_data_hash="d" * 64,
-        git_commit="e" * 40,
+        code_hash="e" * 64,
         period=BacktestPeriod(300_000, 840_000),
         required_range=RequiredRange(0, 840_000),
     )
 
     first = BacktestIdentity.create(**values)
     second = BacktestIdentity.create(**values)
-    changed = BacktestIdentity.create(**(values | {"candle_data_hash": "f" * 64}))
+    changed_candles = BacktestIdentity.create(**(values | {"candle_data_hash": "f" * 64}))
+    changed_code = BacktestIdentity.create(**(values | {"code_hash": "f" * 64}))
 
     assert first == second
     assert len(first.backtest_id) == 64
-    assert first.backtest_id != changed.backtest_id
+    assert first.backtest_id != changed_candles.backtest_id
+    assert first.backtest_id != changed_code.backtest_id
 
 
 def test_trace_uses_the_ordered_policy_unavailable_result_for_missing_levels() -> None:

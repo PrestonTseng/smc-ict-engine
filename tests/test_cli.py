@@ -39,7 +39,7 @@ def test_actual_cli_accepts_implemented_strategy_before_bootstrapping_database(
 
     bootstrap = _cli("database", "bootstrap")
     assert bootstrap.returncode == 0, bootstrap.stderr
-    assert json.loads(bootstrap.stdout) == {"schema_version": 1, "status": "READY", "tables": 5}
+    assert json.loads(bootstrap.stdout) == {"schema_version": 2, "status": "READY", "tables": 5}
 
     status = _cli("database", "status")
     assert status.returncode == 0, status.stderr

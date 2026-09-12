@@ -672,9 +672,9 @@ def test_compose_and_image_apply_non_root_immutable_runtime_hardening() -> None:
     assert "COPY uv.lock" in dockerfile
     assert "uv sync --locked" in dockerfile
     assert "USER 10001:10001" in dockerfile
-    assert "ARG GIT_COMMIT=" not in dockerfile
-    assert "grep -Eq '^[0-9a-f]{40}$'" in dockerfile
-    assert "0000000000000000000000000000000000000000" in dockerfile
+    assert "ARG " not in dockerfile
+    assert compose["services"]["engine"]["image"] == "trading-research-engine:local"
+    assert "args" not in compose["services"]["engine"]["build"]
 
 
 def test_dockerfile_executes_uv_from_the_verified_immutable_0_11_6_index() -> None:
@@ -913,7 +913,7 @@ def test_documented_database_and_scheduler_health_commands_execute_from_data_fol
     assert _run_cli(["scheduler-health"]) == 0
 
     payloads = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
-    assert payloads[0] == {"schema_version": 1, "status": "READY", "tables": 5}
+    assert payloads[0] == {"schema_version": 2, "status": "READY", "tables": 5}
     assert payloads[1]["runs"] == 0
     assert payloads[2] == {"pid": os.getpid(), "status": "READY"}
 
@@ -927,7 +927,6 @@ def test_operator_docs_cover_the_single_secret_release_workflow_and_runtime_evid
     for required_command in (
         'install -d -m 0750 -o 10001 -g 10001 "$DATA_FOLDER"',
         "secrets/discord_webhook_url",
-        'export SMC_ICT_GIT_COMMIT="$(git rev-parse HEAD)"',
         "docker compose build engine",
         "docker compose up -d engine",
         "docker compose ps",
@@ -946,16 +945,17 @@ def test_operator_docs_cover_the_single_secret_release_workflow_and_runtime_evid
     assert "discord_2_webhook_url" not in operator_docs
     assert "https://" not in operator_docs
     assert "./data" not in operations
+    assert "Docker image ID or registry digest" in operations
+    assert "code_hash" in operations
+    assert "PRAGMA user_version;" in operations
+    assert "Rollback" in operations
 
 
 def test_operator_docs_describe_required_env_and_safe_status_commands() -> None:
     configuration = (ROOT / "docs/configuration.md").read_text(encoding="utf-8")
     troubleshooting = (ROOT / "docs/troubleshooting.md").read_text(encoding="utf-8")
 
-    assert (
-        "immutable image revision and required absolute `DATA_FOLDER` configuration"
-        in configuration
-    )
+    assert "required absolute `DATA_FOLDER` configuration" in configuration
     assert 'lsof "$DATA_FOLDER/engine.lock"' in troubleshooting
     assert "docker compose ps" in troubleshooting
     assert "lsof ./data/engine.lock" not in troubleshooting
@@ -976,9 +976,14 @@ def test_required_operator_document_set_is_present_and_cross_linked() -> None:
         assert boundary in document
 
     env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
-    assert (
-        env_example == "SMC_ICT_GIT_COMMIT=\nDATA_FOLDER=/absolute/path/to/trading-research-data\n"
-    )
+    assert env_example == "DATA_FOLDER=/absolute/path/to/trading-research-data\n"
+
+
+def test_ci_builds_without_operator_supplied_git_provenance() -> None:
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+
+    assert "--build-arg" not in workflow
+    assert "calculate_code_hash" in workflow
 
 
 def test_operator_docs_cover_immutable_backtest_workflow_and_failures() -> None:

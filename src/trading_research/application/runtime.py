@@ -179,19 +179,19 @@ class EngineRunner:
         lock_path: str | Path,
         config_loader: RuntimeConfigLoader = load_runtime_configuration,
         clock_ms: Clock,
-        git_commit: str,
+        code_hash: str,
         event_sink: EventSink | None = None,
         event_batch_sink: EventBatchSink | None = None,
     ) -> None:
-        if len(git_commit) != 40 or any(char not in "0123456789abcdef" for char in git_commit):
-            raise ValueError("git commit must be a lowercase 40-character hash")
+        if len(code_hash) != 64 or any(char not in "0123456789abcdef" for char in code_hash):
+            raise ValueError("code hash must be a lowercase 64-character SHA-256")
         self.repository = repository
         self._provider_factory = provider_factory
         self._plugin_factories = MappingProxyType(dict(plugin_factories))
         self._lock_path = Path(lock_path)
         self._config_loader = config_loader
         self._clock_ms = clock_ms
-        self._git_commit = git_commit
+        self._code_hash = code_hash
         self._event_sink = event_sink
         self._event_batch_sink = event_batch_sink
 
@@ -237,7 +237,13 @@ class EngineRunner:
         data_hash = hash_candles(all_candles)
         strategy_hash = hash_strategy(strategy)
         market_hash = hash_market_data(market)
-        run_id = self._run_id(strategy_hash, market_hash, latest_open + 59_999, data_hash)
+        run_id = self._run_id(
+            strategy_hash,
+            market_hash,
+            latest_open + 59_999,
+            data_hash,
+            self._code_hash,
+        )
         running = RunRecord(
             run_id=run_id,
             status="RUNNING",
@@ -249,7 +255,8 @@ class EngineRunner:
             provider_id=market.provider,
             market_type=market.market_type,
             market_config_hash=market_hash,
-            git_commit=self._git_commit,
+            git_commit=None,
+            code_hash=self._code_hash,
             data_start_open_ms=first_open,
             data_end_close_ms=latest_open + 59_999,
             data_hash=data_hash,
@@ -427,12 +434,17 @@ class EngineRunner:
 
     @staticmethod
     def _run_id(
-        strategy_hash: str, market_hash: str, evaluation_time_ms: int, data_hash: str
+        strategy_hash: str,
+        market_hash: str,
+        evaluation_time_ms: int,
+        data_hash: str,
+        code_hash: str,
     ) -> str:
         payload = json.dumps(
-            [strategy_hash, market_hash, evaluation_time_ms, data_hash], separators=(",", ":")
+            [strategy_hash, market_hash, evaluation_time_ms, data_hash, code_hash],
+            separators=(",", ":"),
         ).encode()
-        return sha256(b"engine-run-v1\0" + payload).hexdigest()
+        return sha256(b"engine-run-v2\0" + payload).hexdigest()
 
     @staticmethod
     def _bounded_error(exc: Exception) -> str:

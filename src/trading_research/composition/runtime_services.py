@@ -68,6 +68,7 @@ from trading_research.configuration import (
     resolve_backtest_strategy_path,
 )
 from trading_research.configuration.models import NotificationDestination, ScheduleJob
+from trading_research.provenance import calculate_code_hash
 
 
 @dataclass(frozen=True, slots=True)
@@ -204,7 +205,7 @@ def run_backtest(scenario_path: str | Path) -> ReportPublication:
             strategy_hash=hash_strategy(strategy),
             market_data_hash=hash_market_data(market),
             candle_data_hash=replay.data_hash,
-            git_commit=current_git_commit(),
+            code_hash=calculate_code_hash(),
             period=scenario.period,
             required_range=required,
         )
@@ -230,20 +231,6 @@ def current_time_ms() -> int:
     return time_ns() // 1_000_000
 
 
-def current_git_commit() -> str:
-    configured = os.environ.get("SMC_ICT_GIT_COMMIT")
-    if configured is not None:
-        return configured
-    result = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        text=True,
-        capture_output=True,
-        timeout=5,
-        check=True,
-    )
-    return result.stdout.strip()
-
-
 def build_engine_runner(database: str | Path, lock_path: str | Path) -> EngineRunner:
     root = notification_composition_root()
     plugin_factories = {
@@ -255,7 +242,7 @@ def build_engine_runner(database: str | Path, lock_path: str | Path) -> EngineRu
         plugin_factories=plugin_factories,  # type: ignore[arg-type]
         lock_path=lock_path,
         clock_ms=current_time_ms,
-        git_commit=current_git_commit(),
+        code_hash=calculate_code_hash(),
     )
 
 

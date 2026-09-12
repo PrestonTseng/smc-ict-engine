@@ -20,8 +20,7 @@ host file `secrets/discord_webhook_url`. The destination subscribes to all five 
 events and uses the native `discord_webhook` adapter.
 
 Copy `.env.example` to a local ignored `.env` only when your Compose workflow loads that file. It
-contains the immutable image revision and required absolute `DATA_FOLDER` configuration. Do not
-commit resolved values.
+contains only the required absolute `DATA_FOLDER` configuration. Do not commit resolved values.
 
 Backtest scenarios live under `backtests/<strategy-id>/`, not under global `config/`. Each scenario
 must name one strategy leaf under `strategies/`. It also defines UTC minute boundaries, holding

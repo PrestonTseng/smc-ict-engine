@@ -108,7 +108,7 @@ def _evidence():
         strategy_hash="2" * 64,
         market_data_hash="3" * 64,
         candle_data_hash=replay.data_hash,
-        git_commit="4" * 40,
+        code_hash="4" * 64,
         period=BacktestPeriod(1_767_225_600_000, 1_767_225_660_000),
         required_range=RequiredRange(1_767_225_300_000, 1_767_225_660_000),
     )
@@ -259,8 +259,10 @@ def test_report_publication_emits_consistent_canonical_artifacts(tmp_path: Path)
     assert summary["decision_status_counts"] == [["READY", 1]]
 
     manifest = json.loads((result / "manifest.json").read_bytes())
+    assert manifest["schema_version"] == 2
     assert manifest["backtest_id"] == identity.backtest_id
-    assert manifest["identity"]["git_commit"] == "4" * 40
+    assert manifest["identity"]["code_hash"] == "4" * 64
+    assert "git_commit" not in manifest["identity"]
     assert manifest["assumptions"]["research_only"] is True
     assert manifest["assumptions"]["position_sizing"] is False
     assert set(manifest["artifacts"]) == names - {"manifest.json"}

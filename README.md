@@ -38,7 +38,6 @@ umask 077
 read -rsp 'Discord webhook URL: ' DISCORD_WEBHOOK_URL && printf '\n'
 printf '%s' "$DISCORD_WEBHOOK_URL" > secrets/discord_webhook_url
 unset DISCORD_WEBHOOK_URL
-export SMC_ICT_GIT_COMMIT="$(git rev-parse HEAD)"
 docker compose config --quiet
 docker compose build engine
 docker compose up -d engine
@@ -135,7 +134,6 @@ Backtests use the same global `config/market-data.yaml`, canonical candle store,
 ```sh
 export DATA_FOLDER="$(pwd)/data"
 export CONFIG_FOLDER="$(pwd)/config"
-export SMC_ICT_GIT_COMMIT="$(git rev-parse HEAD)"
 uv run trading-research backtest backtests/source-aligned-research/one-year-baseline.yaml
 ```
 
@@ -150,13 +148,17 @@ V1 also fixes these settings:
 
 The command synchronizes the requested period plus strategy warm-up under the shared writer lock, creates a short-lived SQLite online snapshot, releases the lock, and performs replay, simulation, and reporting offline. It publishes `${DATA_FOLDER}/backtests/<backtest-id>/` only after all six artifacts are complete:
 
-- `manifest.json` binds immutable input identities and the byte size and SHA-256 of every payload artifact.
+- `manifest.json` version 2 binds the automatic installed-source `code_hash`, immutable input identities, and the byte size and SHA-256 of every payload artifact.
 - `decisions.jsonl` and `pipeline-traces.jsonl` preserve every ordered evaluation, pass/reject/unavailable reason, and first rejection.
 - `trades.jsonl` contains normalized, one-unit simulated outcomes without account sizing.
 - `summary.json` contains overall, instrument, direction, disposition, and unavailable-reason metrics.
 - `report.html` embeds each canonical evaluation as a deterministic directly addressable gzip record, plus a compact chunked filter index, so each page decompresses at most its 25 selected evaluations with no CDN or network dependency. Browsers without the standard `DecompressionStream` gzip primitive show an explicit compatibility failure instead of partial evidence.
 
 An identical rerun verifies and reuses byte-identical output. If any existing artifact differs, the command fails without overwriting it. A failure before publication leaves no partial result directory and never writes backtest rows to the five production tables.
+
+Version 1 report directories remain immutable historical evidence. Their manifests continue to
+identify the recorded Git commit; they are never rewritten or assigned a `code_hash`. Newly
+published version 2 manifests use only the automatically calculated source hash.
 
 The offline report benchmark and Chromium probe do not access a provider. The benchmark creates
 synthetic replay-shaped evaluations. It tests report publication and browser limits, not strategy

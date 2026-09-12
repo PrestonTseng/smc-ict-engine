@@ -111,7 +111,7 @@ jobs:
               sdist_names = [member.name for member in archive.getmembers()]
           reject_forbidden(wheel_names)
           reject_forbidden(sdist_names)
-          if len(wheel_names) != 61 or len(sdist_names) != 123:
+          if len(wheel_names) != 62 or len(sdist_names) != 125:
               raise SystemExit(
                   f"package member boundary drift: wheel={len(wheel_names)} sdist={len(sdist_names)}"
               )
@@ -134,9 +134,10 @@ jobs:
       - name: Build and smoke-test the exact container image
         run: |
           docker build \
-            --build-arg "GIT_COMMIT=${GITHUB_SHA}" \
             --tag trading-research-engine:ci \
             .
           test "$(docker image inspect trading-research-engine:ci --format '{{.Config.User}}')" = "10001:10001"
-          test "$(docker image inspect trading-research-engine:ci --format '{{range .Config.Env}}{{println .}}{{end}}' | sed -n 's/^SMC_ICT_GIT_COMMIT=//p')" = "${GITHUB_SHA}"
+          host_code_hash="$(uv run python -c 'from trading_research.provenance import calculate_code_hash; print(calculate_code_hash())')"
+          image_code_hash="$(docker run --rm --read-only --user 10001:10001 --entrypoint python trading-research-engine:ci -c 'from trading_research.provenance import calculate_code_hash; print(calculate_code_hash())')"
+          test "$image_code_hash" = "$host_code_hash"
           docker run --rm --read-only --user 10001:10001 trading-research-engine:ci --help >/dev/null

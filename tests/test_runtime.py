@@ -9,6 +9,15 @@ from typing import Any, cast
 import pytest
 
 
+def test_run_identity_changes_with_code_hash() -> None:
+    from trading_research.application.runtime import EngineRunner
+
+    first = EngineRunner._run_id("a" * 64, "b" * 64, 59_999, "c" * 64, "d" * 64)
+    second = EngineRunner._run_id("a" * 64, "b" * 64, 59_999, "c" * 64, "e" * 64)
+
+    assert first != second
+
+
 def test_runtime_paths_are_fixed_derivations_of_the_required_data_folder(tmp_path: Path) -> None:
     from trading_research.composition.runtime_services import RuntimePaths
 
@@ -87,7 +96,7 @@ def test_run_readiness_uses_historical_sync_service_before_analysis(
         lock_path=tmp_path / "engine.lock",
         config_loader=lambda _request: config,
         clock_ms=lambda: 120_000,
-        git_commit="a" * 40,
+        code_hash="a" * 64,
     )
 
     with pytest.raises(ReadinessFailure, match="readiness failed"):
@@ -385,7 +394,7 @@ def test_manual_and_scheduled_runs_share_one_deterministic_engine_path(tmp_path:
             lock_path=root / "engine.lock",
             config_loader=lambda _request: runtime_config,
             clock_ms=lambda: 300_000,
-            git_commit="a" * 40,
+            code_hash="a" * 64,
             event_sink=emit,
         )
         receipt = runner.run(RunRequest("strategy.yaml", "market.yaml", None, trigger))
@@ -426,7 +435,10 @@ def test_manual_and_scheduled_runs_share_one_deterministic_engine_path(tmp_path:
         "instrument_count": 1,
         "decision_count": 1,
     }
-    assert manual_repository.load_run(manual.run_id).status == "SUCCEEDED"
+    stored_run = manual_repository.load_run(manual.run_id)
+    assert stored_run.status == "SUCCEEDED"
+    assert stored_run.code_hash == "a" * 64
+    assert stored_run.git_commit is None
     assert scheduled_repository.load_decisions(scheduled.run_id)[0].decision_status == "UNAVAILABLE"
 
     isolated, _, isolated_repository = execute(
@@ -557,7 +569,8 @@ def test_restart_recovery_marks_interrupted_running_rows_failed(tmp_path: Path) 
             provider_id="binance_usdm",
             market_type="LINEAR_PERPETUAL",
             market_config_hash="b" * 64,
-            git_commit="c" * 40,
+            git_commit=None,
+            code_hash="c" * 64,
             data_start_open_ms=0,
             data_end_close_ms=59_999,
             data_hash="d" * 64,
@@ -594,7 +607,8 @@ def test_scheduler_recovery_cannot_fail_a_run_owned_by_an_active_process(tmp_pat
             "binance_usdm",
             "LINEAR_PERPETUAL",
             "b" * 64,
-            "c" * 40,
+            None,
+            "c" * 64,
             0,
             59_999,
             "d" * 64,
@@ -640,7 +654,8 @@ def test_atomic_run_commit_rolls_back_evidence_when_a_decision_insert_fails(tmp_
             "binance_usdm",
             "LINEAR_PERPETUAL",
             "b" * 64,
-            "c" * 40,
+            None,
+            "c" * 64,
             0,
             59_999,
             "d" * 64,

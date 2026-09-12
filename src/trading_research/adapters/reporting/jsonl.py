@@ -147,14 +147,14 @@ class BacktestReportPublisher:
         replay: ReplayResult,
     ) -> dict[str, object]:
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "backtest_id": identity.backtest_id,
             "identity": {
                 "scenario_hash": identity.scenario_hash,
                 "strategy_hash": identity.strategy_hash,
                 "market_data_hash": identity.market_data_hash,
                 "candle_data_hash": identity.candle_data_hash,
-                "git_commit": identity.git_commit,
+                "code_hash": identity.code_hash,
                 "period": identity.period.canonical_dict(),
                 "required_range": identity.required_range.canonical_dict(),
             },

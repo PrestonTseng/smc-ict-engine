@@ -1,9 +1,7 @@
 x-runtime: &runtime
   build:
     context: .
-    args:
-      GIT_COMMIT: ${SMC_ICT_GIT_COMMIT:?Set SMC_ICT_GIT_COMMIT to the immutable 40-character commit}
-  image: trading-research-engine:${SMC_ICT_GIT_COMMIT:?Set SMC_ICT_GIT_COMMIT to the immutable 40-character commit}
+  image: trading-research-engine:local
   pull_policy: never
   init: true
   user: "10001:10001"

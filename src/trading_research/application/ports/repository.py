@@ -34,7 +34,8 @@ class RunRecord:
     provider_id: str
     market_type: str
     market_config_hash: str
-    git_commit: str
+    git_commit: str | None
+    code_hash: str | None
     data_start_open_ms: int
     data_end_close_ms: int
     data_hash: str

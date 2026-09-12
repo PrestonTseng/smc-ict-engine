@@ -15,7 +15,6 @@ umask 077
 read -rsp 'Discord webhook URL: ' DISCORD_WEBHOOK_URL && printf '\n'
 printf '%s' "$DISCORD_WEBHOOK_URL" > secrets/discord_webhook_url
 unset DISCORD_WEBHOOK_URL
-export SMC_ICT_GIT_COMMIT="$(git rev-parse HEAD)"
 uv run trading-research database bootstrap
 uv run trading-research database status
 docker compose config --quiet
@@ -29,6 +28,12 @@ root. Runtime composition derives its configuration root only from the normalize
 `CONFIG_FOLDER`; operation-level path overrides are intentionally rejected. Compose supplies both
 roots inside the container and requires the configured data, config, and strategy sources instead
 of creating them.
+
+Deployment and research provenance are separate. Record the Docker image ID or registry digest for
+the deployed container; Compose intentionally uses the fixed local tag
+`trading-research-engine:local`, which is only a mutable local name. Each process automatically
+calculates a lowercase SHA-256 `code_hash` from the installed `trading_research` Python sources.
+Run and backtest evidence uses that source hash and does not accept an operator-entered revision.
 
 Rotate the secret atomically, then recreate the service so Compose remounts it:
 
@@ -119,12 +124,12 @@ The scheduler stops new fires. It terminates, kills, drains, and reconciles an a
 
 ## Run an immutable backtest
 
-For host execution, set normalized absolute runtime roots and bind the result to the exact commit:
+For host execution, set normalized absolute runtime roots. The command hashes its installed source
+payload automatically:
 
 ```sh
 export DATA_FOLDER="$(pwd)/data"
 export CONFIG_FOLDER="$(pwd)/config"
-export SMC_ICT_GIT_COMMIT="$(git rev-parse HEAD)"
 uv run trading-research backtest backtests/source-aligned-research/one-year-baseline.yaml
 ```
 
@@ -142,3 +147,36 @@ docker compose start engine
 Open `${DATA_FOLDER}/backtests/<backtest-id>/report.html` locally. Treat JSON and JSONL as the
 canonical audit evidence. Do not edit an existing result. Change the scenario version or assumptions
 to produce a new identity.
+
+## Production schema version 2 cutover and rollback
+
+Do not cut over while the scheduler is active. First stop it and create a verified online backup of
+the version 1 database. Build the candidate image, record its immutable image ID (or registry digest
+when using a registry), then let the candidate open the database once. Opening a valid version 1
+database transactionally rebuilds `runs`, preserves legacy `git_commit` values and related evidence,
+and sets schema version 2. No historical `code_hash` is invented.
+
+```sh
+docker compose stop --timeout 30 engine
+sqlite3 "$DATA_FOLDER/trading_research.db" '.backup backups/trading_research.pre-v2.db'
+sqlite3 backups/trading_research.pre-v2.db 'PRAGMA integrity_check; PRAGMA foreign_key_check; PRAGMA user_version;'
+docker compose build engine
+docker image inspect trading-research-engine:local --format '{{.Id}}'
+docker compose --profile manual run --rm manual database status
+sqlite3 "$DATA_FOLDER/trading_research.db" 'PRAGMA integrity_check; PRAGMA foreign_key_check; PRAGMA user_version;'
+docker compose up -d engine
+```
+
+Confirm `PRAGMA user_version;` returns `2`, both integrity commands are clean, health is ready, and
+new `runs` rows contain `code_hash` with `git_commit` null before accepting the cutover.
+
+Rollback requires both the pre-cutover database backup and the previously recorded image ID or
+digest. Stop the candidate before restoring; version 1 software must never open the version 2 file.
+
+```sh
+docker compose stop --timeout 30 engine
+cp backups/trading_research.pre-v2.db "$DATA_FOLDER/trading_research.db"
+# Restore/re-tag the previously recorded image ID or digest as trading-research-engine:local.
+docker compose up -d engine
+docker compose ps
+```
