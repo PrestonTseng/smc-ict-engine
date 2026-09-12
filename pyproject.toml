@@ -1,7 +1,7 @@
 [project]
-name = "smc-ict-engine"
-version = "0.1.0"
-description = "Provider-neutral closed-candle SMC/ICT research engine"
+name = "trading-research-engine"
+version = "0.2.0"
+description = "Provider-neutral closed-candle Trading Research Engine"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -19,7 +19,7 @@ dev = [
 ]
 
 [project.scripts]
-smc-ict = "smc_ict.cli:main"
+trading-research = "trading_research.cli:main"
 
 [build-system]
 requires = ["hatchling==1.27.0"]
@@ -39,7 +39,7 @@ exclude = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/smc_ict"]
+packages = ["src/trading_research"]
 
 [tool.pytest.ini_options]
 addopts = "-ra --strict-config --strict-markers"
@@ -55,4 +55,4 @@ select = ["E", "F", "I", "B", "UP", "RUF"]
 [tool.mypy]
 python_version = "3.13"
 strict = true
-packages = ["smc_ict"]
+packages = ["trading_research"]

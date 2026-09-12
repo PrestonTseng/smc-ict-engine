@@ -13,7 +13,7 @@ import pytest
 
 def _cli(*args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["uv", "run", "smc-ict", *args],
+        ["uv", "run", "trading-research", *args],
         text=True,
         capture_output=True,
         timeout=10,
@@ -47,7 +47,7 @@ def test_actual_cli_accepts_implemented_strategy_before_bootstrapping_database(
 
 
 def test_cli_uses_global_runtime_authority_and_sync_range_accepts_only_dates() -> None:
-    from smc_ict.cli import _parser
+    from trading_research.cli import _parser
 
     parser = _parser()
     sync = parser.parse_args(
@@ -81,7 +81,7 @@ def test_cli_uses_global_runtime_authority_and_sync_range_accepts_only_dates() -
 def test_sync_range_cli_delegates_to_the_shared_application_service(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from smc_ict import cli
+    from trading_research import cli
 
     calls: list[tuple[str, str]] = []
 
@@ -116,7 +116,7 @@ def test_sync_range_cli_delegates_to_the_shared_application_service(
 def test_run_requires_the_global_config_folder_before_composition(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from smc_ict import cli
+    from trading_research import cli
 
     monkeypatch.setenv("DATA_FOLDER", str(tmp_path))
     monkeypatch.delenv("CONFIG_FOLDER", raising=False)
@@ -187,9 +187,9 @@ def test_notifier_test_rejects_a_nested_payload_before_secret_resolution(tmp_pat
 def test_cli_structured_logging_emits_only_allowlisted_notification_fields() -> None:
     script = """
 import logging
-from smc_ict.cli import _configure_logging
+from trading_research.cli import _configure_logging
 _configure_logging()
-logging.getLogger('smc_ict.application.notifications').info(
+logging.getLogger('trading_research.application.notifications').info(
     'notification_delivery_outcome',
     extra={
         'destination_id': 'discord_debug',
@@ -231,7 +231,7 @@ def test_write_makes_a_complete_json_line_visible_while_child_remains_alive() ->
             "-c",
             (
                 "import sys, time; "
-                "from smc_ict.cli import _write; "
+                "from trading_research.cli import _write; "
                 "_write({'status': 'READY'}); "
                 "sys.stderr.write('WRITE_RETURNED\\n'); "
                 "sys.stderr.flush(); "
@@ -274,7 +274,7 @@ def test_scheduler_cli_reports_readiness_and_shuts_down_gracefully(
         [
             "uv",
             "run",
-            "smc-ict",
+            "trading-research",
             "scheduler",
             "--schedule",
             str(schedule),
@@ -301,7 +301,7 @@ def test_scheduler_cli_reports_readiness_and_shuts_down_gracefully(
 
 
 def test_scheduler_cli_has_no_complete_job_retry_policy() -> None:
-    from smc_ict.cli import _parser
+    from trading_research.cli import _parser
 
     with pytest.raises(SystemExit):
         _parser().parse_args(
@@ -316,8 +316,8 @@ def test_scheduler_cli_has_no_complete_job_retry_policy() -> None:
 
 
 def test_one_shot_cli_runner_wires_all_implemented_plugins_without_network(tmp_path: Path) -> None:
-    from smc_ict.composition.runtime_services import build_engine_runner
-    from smc_ict.configuration import IMPLEMENTED_PLUGIN_IDS
+    from trading_research.composition.runtime_services import build_engine_runner
+    from trading_research.configuration import IMPLEMENTED_PLUGIN_IDS
 
     runner = build_engine_runner(tmp_path / "runtime.sqlite3", tmp_path / "engine.lock")
 

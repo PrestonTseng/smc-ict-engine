@@ -14,13 +14,18 @@ import tracemalloc
 from hashlib import sha256
 from pathlib import Path
 
-from smc_ict.adapters.reporting.jsonl import BacktestReportPublisher
-from smc_ict.application.backtesting import BacktestIdentity, RequiredRange
-from smc_ict.application.execution_simulator import SimulationResult
-from smc_ict.application.metrics import summarize_backtest
-from smc_ict.configuration import load_backtest, load_market_data, load_strategy
-from smc_ict.domain import Decision
-from smc_ict.domain.backtesting import PipelineStep, PipelineTrace, ReplayEvaluation, ReplayResult
+from trading_research.adapters.reporting.jsonl import BacktestReportPublisher
+from trading_research.application.backtesting import BacktestIdentity, RequiredRange
+from trading_research.application.execution_simulator import SimulationResult
+from trading_research.application.metrics import summarize_backtest
+from trading_research.configuration import load_backtest, load_market_data, load_strategy
+from trading_research.domain import Decision
+from trading_research.domain.backtesting import (
+    PipelineStep,
+    PipelineTrace,
+    ReplayEvaluation,
+    ReplayResult,
+)
 
 DEFAULT_EVALUATIONS = 210_240
 PAGE_SIZE = 25

@@ -5,9 +5,9 @@ from typing import Never
 
 
 def test_router_fans_out_in_destination_id_order_with_independent_filters() -> None:
-    from smc_ict.application.notifications import NotificationRouter
-    from smc_ict.application.ports import DeliveryReceipt, NotificationEvent
-    from smc_ict.configuration.models import (
+    from trading_research.application.notifications import NotificationRouter
+    from trading_research.application.ports import DeliveryReceipt, NotificationEvent
+    from trading_research.configuration.models import (
         BatchingConfig,
         DeduplicationConfig,
         NotificationConfig,
@@ -77,9 +77,9 @@ def test_router_fans_out_in_destination_id_order_with_independent_filters() -> N
 
 
 def test_router_deduplicates_per_destination_without_suppressing_other_destinations() -> None:
-    from smc_ict.application.notifications import NotificationRouter
-    from smc_ict.application.ports import DeliveryReceipt, NotificationEvent
-    from smc_ict.configuration.models import (
+    from trading_research.application.notifications import NotificationRouter
+    from trading_research.application.ports import DeliveryReceipt, NotificationEvent
+    from trading_research.configuration.models import (
         BatchingConfig,
         DeduplicationConfig,
         NotificationConfig,
@@ -148,8 +148,8 @@ def test_router_deduplicates_per_destination_without_suppressing_other_destinati
 
 
 def test_router_does_not_construct_an_adapter_for_a_disabled_destination() -> None:
-    from smc_ict.application.notifications import NotificationRouter
-    from smc_ict.configuration.models import (
+    from trading_research.application.notifications import NotificationRouter
+    from trading_research.configuration.models import (
         BatchingConfig,
         DeduplicationConfig,
         NotificationConfig,
@@ -181,9 +181,9 @@ def test_router_does_not_construct_an_adapter_for_a_disabled_destination() -> No
 
 
 def test_router_isolates_enabled_destination_construction_failures() -> None:
-    from smc_ict.application.notifications import NotificationRouter
-    from smc_ict.application.ports import DeliveryReceipt, NotificationEvent
-    from smc_ict.configuration.models import (
+    from trading_research.application.notifications import NotificationRouter
+    from trading_research.application.ports import DeliveryReceipt, NotificationEvent
+    from trading_research.configuration.models import (
         BatchingConfig,
         DeduplicationConfig,
         NotificationConfig,
@@ -243,9 +243,9 @@ def test_router_isolates_enabled_destination_construction_failures() -> None:
 
 
 def test_router_batches_multiple_events_per_destination_in_order() -> None:
-    from smc_ict.application.notifications import NotificationRouter
-    from smc_ict.application.ports import DeliveryReceipt, NotificationEvent
-    from smc_ict.configuration.models import (
+    from trading_research.application.notifications import NotificationRouter
+    from trading_research.application.ports import DeliveryReceipt, NotificationEvent
+    from trading_research.configuration.models import (
         BatchingConfig,
         DeduplicationConfig,
         NotificationConfig,
@@ -299,9 +299,9 @@ def test_router_batches_multiple_events_per_destination_in_order() -> None:
 
 
 def test_router_flushes_pending_destination_before_accepting_event_at_deadline() -> None:
-    from smc_ict.application.notifications import NotificationRouter
-    from smc_ict.application.ports import DeliveryReceipt, NotificationEvent
-    from smc_ict.configuration.models import (
+    from trading_research.application.notifications import NotificationRouter
+    from trading_research.application.ports import DeliveryReceipt, NotificationEvent
+    from trading_research.configuration.models import (
         BatchingConfig,
         DeduplicationConfig,
         NotificationConfig,
@@ -366,10 +366,10 @@ def test_router_flushes_pending_destination_before_accepting_event_at_deadline()
 def test_repeated_two_event_batch_is_deduplicated_by_a_fresh_router_using_sqlite(
     tmp_path: Path,
 ) -> None:
-    from smc_ict.adapters.persistence.sqlite import SQLiteRepository
-    from smc_ict.application.notifications import NotificationRouter
-    from smc_ict.application.ports import DeliveryReceipt, NotificationEvent, RunRecord
-    from smc_ict.configuration.models import (
+    from trading_research.adapters.persistence.sqlite import SQLiteRepository
+    from trading_research.application.notifications import NotificationRouter
+    from trading_research.application.ports import DeliveryReceipt, NotificationEvent, RunRecord
+    from trading_research.configuration.models import (
         BatchingConfig,
         DeduplicationConfig,
         NotificationConfig,

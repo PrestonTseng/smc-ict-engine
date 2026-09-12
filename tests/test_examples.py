@@ -3,7 +3,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from smc_ict.configuration import (
+from trading_research.configuration import (
     load_market_data,
     load_notifications,
     load_schedule,
@@ -14,9 +14,9 @@ ROOT = Path(__file__).parents[1]
 
 
 def test_active_market_config_selects_okx_swap_and_keeps_binance_as_an_alternate() -> None:
-    from smc_ict.adapters.market_data.binance_usdm import BinanceUsdmProvider
-    from smc_ict.adapters.market_data.okx_swap import OkxSwapProvider
-    from smc_ict.composition import build_market_provider, market_data_composition_root
+    from trading_research.adapters.market_data.binance_usdm import BinanceUsdmProvider
+    from trading_research.adapters.market_data.okx_swap import OkxSwapProvider
+    from trading_research.composition import build_market_provider, market_data_composition_root
 
     root = market_data_composition_root()
     active = load_market_data(ROOT / "config/market-data.yaml")

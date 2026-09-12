@@ -9,16 +9,16 @@ from pathlib import Path
 
 import pytest
 
-from smc_ict.adapters.persistence.sqlite import SQLiteRepository
-from smc_ict.application.notifications import NotificationRouter
-from smc_ict.application.ports import (
+from trading_research.adapters.persistence.sqlite import SQLiteRepository
+from trading_research.application.notifications import NotificationRouter
+from trading_research.application.ports import (
     DeliveryReceipt,
     NotificationDedupRecord,
     NotificationDeliveryRecord,
     NotificationEvent,
     RunRecord,
 )
-from smc_ict.configuration.models import (
+from trading_research.configuration.models import (
     BatchingConfig,
     DeduplicationConfig,
     NotificationConfig,
@@ -236,7 +236,7 @@ def test_failed_delivery_persists_a_bounded_redacted_outcome(
     repository = _repository(database)
     calls: list[tuple[str, tuple[str, ...]]] = []
 
-    with caplog.at_level("INFO", logger="smc_ict.application.notifications"):
+    with caplog.at_level("INFO", logger="trading_research.application.notifications"):
         receipt = _router(
             repository,
             {"bad": _destination(maximum=1)},
@@ -289,7 +289,7 @@ def test_adapter_construction_error_is_mapped_before_persistence_and_logging(
         deduplication_store=repository,
     )
 
-    with caplog.at_level("INFO", logger="smc_ict.application.notifications"):
+    with caplog.at_level("INFO", logger="trading_research.application.notifications"):
         receipt = router.deliver(_event("run_succeeded"))
 
     outcomes = SQLiteRepository(database).load_notification_outcomes("run")
@@ -308,7 +308,7 @@ def test_successful_delivery_persists_redacted_outcome_and_dedup_state(
     repository = _repository(database)
     calls: list[tuple[str, tuple[str, ...]]] = []
 
-    with caplog.at_level("INFO", logger="smc_ict.application.notifications"):
+    with caplog.at_level("INFO", logger="trading_research.application.notifications"):
         receipt = _router(repository, {"good": _destination(maximum=1)}, calls, now=456).deliver(
             _event("run_succeeded")
         )
@@ -449,7 +449,7 @@ def test_malformed_retained_outcome_returns_bounded_receipt_without_disclosure(
         ).fetchone()[0]
     calls: list[tuple[str, tuple[str, ...]]] = []
 
-    with caplog.at_level("INFO", logger="smc_ict.application.notifications"):
+    with caplog.at_level("INFO", logger="trading_research.application.notifications"):
         receipt = _router(repository, {"only": _destination(maximum=1)}, calls, now=101).deliver(
             _event("run_succeeded")
         )
@@ -545,10 +545,10 @@ def test_fresh_manual_or_scheduler_child_suppresses_durable_duplicate(
     probe = """
 import sys
 from pathlib import Path
-from smc_ict.adapters.persistence.sqlite import SQLiteRepository
-from smc_ict.application.notifications import NotificationRouter
-from smc_ict.application.ports import DeliveryReceipt, NotificationEvent
-from smc_ict.configuration.models import (
+from trading_research.adapters.persistence.sqlite import SQLiteRepository
+from trading_research.application.notifications import NotificationRouter
+from trading_research.application.ports import DeliveryReceipt, NotificationEvent
+from trading_research.configuration.models import (
     BatchingConfig, DeduplicationConfig, NotificationConfig,
     NotificationDestination, RedactionConfig, RetryConfig,
     SecretRef, frozen_mapping,

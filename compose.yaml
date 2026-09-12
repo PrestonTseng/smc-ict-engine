@@ -3,7 +3,7 @@ x-runtime: &runtime
     context: .
     args:
       GIT_COMMIT: ${SMC_ICT_GIT_COMMIT:?Set SMC_ICT_GIT_COMMIT to the immutable 40-character commit}
-  image: smc-ict-engine:${SMC_ICT_GIT_COMMIT:?Set SMC_ICT_GIT_COMMIT to the immutable 40-character commit}
+  image: trading-research-engine:${SMC_ICT_GIT_COMMIT:?Set SMC_ICT_GIT_COMMIT to the immutable 40-character commit}
   pull_policy: never
   init: true
   user: "10001:10001"
@@ -50,7 +50,7 @@ services:
     restart: unless-stopped
     stop_grace_period: 30s
     healthcheck:
-      test: ["CMD", "smc-ict", "scheduler-health"]
+      test: ["CMD", "trading-research", "scheduler-health"]
       interval: 10s
       timeout: 5s
       retries: 3

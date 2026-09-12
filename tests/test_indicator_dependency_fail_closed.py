@@ -4,9 +4,9 @@ from collections.abc import Mapping
 
 import pytest
 
-from smc_ict.application.graph import RunContext
-from smc_ict.application.resampling import DerivedCandle
-from smc_ict.domain import Observation
+from trading_research.application.graph import RunContext
+from trading_research.application.resampling import DerivedCandle
+from trading_research.domain import Observation
 
 
 def candle(interval: str) -> DerivedCandle:
@@ -127,7 +127,7 @@ def test_every_dependent_plugin_propagates_evaluable_failed_prerequisite(
     timeframe: str,
     dependency_ids: tuple[str, ...],
 ) -> None:
-    from smc_ict.composition.registries import indicator_composition_root
+    from trading_research.composition.registries import indicator_composition_root
 
     dependencies = {
         dependency_id: dependency(dependency_id, status="FAIL" if index == 0 else "PASS")

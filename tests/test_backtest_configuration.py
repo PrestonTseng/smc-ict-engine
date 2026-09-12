@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from smc_ict.configuration import StrictConfigurationError
+from trading_research.configuration import StrictConfigurationError
 
 VALID_SCENARIO = """\
 backtest:
@@ -32,7 +32,7 @@ backtest:
 def test_backtest_scenario_is_strict_canonical_and_resolves_only_its_exact_strategy(
     tmp_path: Path,
 ) -> None:
-    from smc_ict.configuration import (
+    from trading_research.configuration import (
         hash_backtest,
         load_backtest_text,
         resolve_backtest_strategy_path,
@@ -79,15 +79,15 @@ def test_backtest_scenario_is_strict_canonical_and_resolves_only_its_exact_strat
 def test_backtest_scenario_rejects_ambiguous_or_forbidden_values(
     old: str, new: str, message: str
 ) -> None:
-    from smc_ict.configuration import load_backtest_text
+    from trading_research.configuration import load_backtest_text
 
     with pytest.raises(StrictConfigurationError, match=message):
         load_backtest_text(VALID_SCENARIO.replace(old, new))
 
 
 def test_backtest_required_range_includes_the_exact_strategy_warmup() -> None:
-    from smc_ict.application.backtesting import RequiredRangeResolver
-    from smc_ict.configuration import load_backtest_text
+    from trading_research.application.backtesting import RequiredRangeResolver
+    from trading_research.configuration import load_backtest_text
 
     scenario = load_backtest_text(VALID_SCENARIO)
 
@@ -98,7 +98,7 @@ def test_backtest_required_range_includes_the_exact_strategy_warmup() -> None:
 
 
 def test_checked_in_scenario_binds_the_checked_in_strategy() -> None:
-    from smc_ict.configuration import load_backtest, resolve_backtest_strategy_path
+    from trading_research.configuration import load_backtest, resolve_backtest_strategy_path
 
     root = Path(__file__).parents[1]
     scenario_path = root / "backtests/source-aligned-research/one-year-baseline.yaml"

@@ -12,7 +12,7 @@ from typing import ClassVar
 
 import pytest
 
-from smc_ict.application.runtime import RunReceipt
+from trading_research.application.runtime import RunReceipt
 
 _UNTRUSTED_CHILD_TEXT = "FICTIONAL_SECRET"
 
@@ -40,10 +40,10 @@ def _run_managed_receipt(
     returncode: int,
     stdout: str,
 ) -> tuple[RunReceipt, tuple[tuple[object, ...], ...], list[LogRecord]]:
-    from smc_ict.adapters.persistence.sqlite import SQLiteRepository
-    from smc_ict.application.scheduler import InternalScheduler, RetryPolicy
-    from smc_ict.composition.runtime_services import _ManagedSubprocessOperation
-    from smc_ict.configuration.models import ScheduleConfig
+    from trading_research.adapters.persistence.sqlite import SQLiteRepository
+    from trading_research.application.scheduler import InternalScheduler, RetryPolicy
+    from trading_research.composition.runtime_services import _ManagedSubprocessOperation
+    from trading_research.configuration.models import ScheduleConfig
 
     class Process:
         def __init__(self) -> None:
@@ -71,7 +71,7 @@ def _run_managed_receipt(
         retry_policy=RetryPolicy(1, ()),
     )
 
-    with caplog.at_level("INFO", logger="smc_ict.application.scheduler"):
+    with caplog.at_level("INFO", logger="trading_research.application.scheduler"):
         receipt = service._run_job(operation, "fixture-job")
 
     with sqlite3.connect(database) as connection:
@@ -206,9 +206,9 @@ def test_managed_scheduler_redacts_every_invalid_child_receipt(
 def test_scheduler_and_sqlite_fail_closed_when_an_operation_bypasses_child_validation(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    from smc_ict.adapters.persistence.sqlite import SQLiteRepository
-    from smc_ict.application.scheduler import InternalScheduler, RetryPolicy
-    from smc_ict.configuration.models import ScheduleConfig
+    from trading_research.adapters.persistence.sqlite import SQLiteRepository
+    from trading_research.application.scheduler import InternalScheduler, RetryPolicy
+    from trading_research.configuration.models import ScheduleConfig
 
     database = tmp_path / "bypass.sqlite3"
     repository = SQLiteRepository(database)
@@ -221,7 +221,7 @@ def test_scheduler_and_sqlite_fail_closed_when_an_operation_bypasses_child_valid
         retry_policy=RetryPolicy(1, ()),
     )
 
-    with caplog.at_level("INFO", logger="smc_ict.application.scheduler"):
+    with caplog.at_level("INFO", logger="trading_research.application.scheduler"):
         service._run_job(
             lambda: RunReceipt(
                 _UNTRUSTED_CHILD_TEXT,
@@ -340,7 +340,7 @@ def test_scheduler_persists_and_warns_on_child_success_with_warnings(
         stdout=json.dumps(payload),
     )
 
-    from smc_ict.adapters.persistence.sqlite import SQLiteRepository
+    from trading_research.adapters.persistence.sqlite import SQLiteRepository
 
     SQLiteRepository(tmp_path / "receipt.sqlite3")
     with sqlite3.connect(tmp_path / "receipt.sqlite3") as connection:
@@ -378,7 +378,7 @@ def test_scheduler_persists_and_warns_on_child_success_with_warnings(
 def test_scheduler_translates_both_read_only_roots_for_every_config_root_mode(
     config_root: Path, container_path: str, expected: Path
 ) -> None:
-    from smc_ict.composition.runtime_services import _host_config_path
+    from trading_research.composition.runtime_services import _host_config_path
 
     assert _host_config_path(container_path, config_root) == expected
 
@@ -386,7 +386,7 @@ def test_scheduler_translates_both_read_only_roots_for_every_config_root_mode(
 def test_active_schedule_fires_one_minute_after_each_completed_15m_boundary() -> None:
     from apscheduler.triggers.cron import CronTrigger
 
-    from smc_ict.configuration import load_schedule
+    from trading_research.configuration import load_schedule
 
     schedule = load_schedule(Path(__file__).parents[1] / "config/schedule.yaml")
     job = schedule.jobs[0]
@@ -415,8 +415,8 @@ def test_active_schedule_fires_one_minute_after_each_completed_15m_boundary() ->
 
 
 def test_complete_scheduler_job_is_never_retried() -> None:
-    from smc_ict.application.runtime import RunReceipt
-    from smc_ict.application.scheduler import RetryPolicy, run_with_retries
+    from trading_research.application.runtime import RunReceipt
+    from trading_research.application.scheduler import RetryPolicy, run_with_retries
 
     attempts = 0
     delays: list[float] = []
@@ -441,7 +441,7 @@ def test_complete_scheduler_job_is_never_retried() -> None:
 
 
 def test_scheduler_retries_a_non_allowlisted_receipt_status() -> None:
-    from smc_ict.application.scheduler import RetryPolicy, run_with_retries
+    from trading_research.application.scheduler import RetryPolicy, run_with_retries
 
     attempts = 0
 
@@ -468,10 +468,10 @@ def test_scheduler_retries_a_non_allowlisted_receipt_status() -> None:
 def test_scheduler_persists_and_logs_attempt_before_a_pre_run_failure(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    from smc_ict.adapters.persistence.sqlite import SQLiteRepository
-    from smc_ict.application.runtime import RunReceipt
-    from smc_ict.application.scheduler import InternalScheduler, RetryPolicy
-    from smc_ict.configuration.models import ScheduleConfig
+    from trading_research.adapters.persistence.sqlite import SQLiteRepository
+    from trading_research.application.runtime import RunReceipt
+    from trading_research.application.scheduler import InternalScheduler, RetryPolicy
+    from trading_research.configuration.models import ScheduleConfig
 
     database = tmp_path / "attempts.sqlite3"
     repository = SQLiteRepository(database)
@@ -492,7 +492,7 @@ def test_scheduler_persists_and_logs_attempt_before_a_pre_run_failure(
         retry_policy=RetryPolicy(1, ()),
     )
 
-    with caplog.at_level("INFO", logger="smc_ict.application.scheduler"):
+    with caplog.at_level("INFO", logger="trading_research.application.scheduler"):
         receipt = service._run_job(operation, "fixture-job")
 
     assert receipt.status == "FAILED"
@@ -509,9 +509,9 @@ def test_scheduler_persists_and_logs_attempt_before_a_pre_run_failure(
 def test_scheduler_persists_and_logs_an_overlap_skip(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    from smc_ict.adapters.persistence.sqlite import SQLiteRepository
-    from smc_ict.application.scheduler import InternalScheduler, RetryPolicy
-    from smc_ict.configuration.models import ScheduleConfig
+    from trading_research.adapters.persistence.sqlite import SQLiteRepository
+    from trading_research.application.scheduler import InternalScheduler, RetryPolicy
+    from trading_research.configuration.models import ScheduleConfig
 
     database = tmp_path / "overlap.sqlite3"
     service = InternalScheduler(
@@ -522,7 +522,7 @@ def test_scheduler_persists_and_logs_an_overlap_skip(
         retry_policy=RetryPolicy(1, ()),
     )
 
-    with caplog.at_level("INFO", logger="smc_ict.application.scheduler"):
+    with caplog.at_level("INFO", logger="trading_research.application.scheduler"):
         service._record_overlap("fixture-job", scheduled_at_ms=60_000)
 
     with sqlite3.connect(database) as connection:
@@ -535,10 +535,10 @@ def test_scheduler_persists_and_logs_an_overlap_skip(
 
 
 def test_scheduler_persists_timeout_category_without_child_error_text(tmp_path: Path) -> None:
-    from smc_ict.adapters.persistence.sqlite import SQLiteRepository
-    from smc_ict.application.runtime import RunReceipt
-    from smc_ict.application.scheduler import InternalScheduler, RetryPolicy
-    from smc_ict.configuration.models import ScheduleConfig
+    from trading_research.adapters.persistence.sqlite import SQLiteRepository
+    from trading_research.application.runtime import RunReceipt
+    from trading_research.application.scheduler import InternalScheduler, RetryPolicy
+    from trading_research.configuration.models import ScheduleConfig
 
     database = tmp_path / "timeout.sqlite3"
     times = iter((1_000, 2_000))
@@ -563,11 +563,11 @@ def test_scheduler_persists_timeout_category_without_child_error_text(tmp_path: 
 
 
 def test_timeout_reconciliation_does_not_finish_the_parent_attempt_early(tmp_path: Path) -> None:
-    from smc_ict.adapters.persistence.sqlite import SQLiteRepository
-    from smc_ict.application.ports import RunRecord
-    from smc_ict.application.runtime import RunReceipt
-    from smc_ict.application.scheduler import InternalScheduler, RetryPolicy
-    from smc_ict.configuration.models import ScheduleConfig
+    from trading_research.adapters.persistence.sqlite import SQLiteRepository
+    from trading_research.application.ports import RunRecord
+    from trading_research.application.runtime import RunReceipt
+    from trading_research.application.scheduler import InternalScheduler, RetryPolicy
+    from trading_research.configuration.models import ScheduleConfig
 
     repository = SQLiteRepository(tmp_path / "timeout-ownership.sqlite3")
     times = iter((1_000, 2_000, 2_000))
@@ -620,9 +620,9 @@ def test_timeout_reconciliation_does_not_finish_the_parent_attempt_early(tmp_pat
 
 
 def test_scheduler_applies_utc_misfire_overlap_coalescing_recovery_and_shutdown() -> None:
-    from smc_ict.application.runtime import RunReceipt
-    from smc_ict.application.scheduler import InternalScheduler, RetryPolicy
-    from smc_ict.configuration.models import ScheduleConfig, ScheduleJob
+    from trading_research.application.runtime import RunReceipt
+    from trading_research.application.scheduler import InternalScheduler, RetryPolicy
+    from trading_research.configuration.models import ScheduleConfig, ScheduleJob
 
     schedule = ScheduleConfig(
         enabled=True,
@@ -675,9 +675,9 @@ def test_scheduler_applies_utc_misfire_overlap_coalescing_recovery_and_shutdown(
 
 
 def test_scheduler_honors_configured_startup_delay_for_first_fire() -> None:
-    from smc_ict.application.runtime import RunReceipt
-    from smc_ict.application.scheduler import InternalScheduler, RetryPolicy
-    from smc_ict.configuration.models import ScheduleConfig, ScheduleJob
+    from trading_research.application.runtime import RunReceipt
+    from trading_research.application.scheduler import InternalScheduler, RetryPolicy
+    from trading_research.configuration.models import ScheduleConfig, ScheduleJob
 
     schedule = ScheduleConfig(
         enabled=True,
@@ -723,7 +723,7 @@ def test_scheduler_honors_configured_startup_delay_for_first_fire() -> None:
 def test_scheduler_build_validates_every_referenced_job_authority_before_readiness(
     tmp_path,
 ) -> None:
-    from smc_ict.composition.runtime_services import build_scheduler
+    from trading_research.composition.runtime_services import build_scheduler
 
     schedule = tmp_path / "schedule.yaml"
     schedule.write_text(
@@ -762,7 +762,7 @@ def test_scheduler_build_validates_every_referenced_job_authority_before_readine
 
 
 def test_scheduler_build_loads_only_the_global_market_data_authority(tmp_path, monkeypatch) -> None:
-    from smc_ict.composition import runtime_services
+    from trading_research.composition import runtime_services
 
     schedule = tmp_path / "schedule.yaml"
     schedule.write_text(
@@ -801,7 +801,7 @@ def test_scheduler_build_loads_only_the_global_market_data_authority(tmp_path, m
 
     runtime_services.build_scheduler(
         schedule_path=schedule,
-        database=tmp_path / "smc_ict.db",
+        database=tmp_path / "trading_research.db",
         lock_path=tmp_path / "engine.lock",
         config_root=tmp_path,
     )
@@ -810,9 +810,9 @@ def test_scheduler_build_loads_only_the_global_market_data_authority(tmp_path, m
 
 
 def test_scheduler_shutdown_stops_and_drains_an_active_owned_operation() -> None:
-    from smc_ict.application.runtime import RunReceipt
-    from smc_ict.application.scheduler import InternalScheduler, RetryPolicy
-    from smc_ict.configuration.models import ScheduleConfig, ScheduleJob
+    from trading_research.application.runtime import RunReceipt
+    from trading_research.application.scheduler import InternalScheduler, RetryPolicy
+    from trading_research.configuration.models import ScheduleConfig, ScheduleJob
 
     entered = Event()
     released = Event()
@@ -886,8 +886,8 @@ def test_scheduler_shutdown_stops_and_drains_an_active_owned_operation() -> None
 def test_timed_out_child_is_terminated_killed_drained_and_durably_reconciled(
     tmp_path, monkeypatch
 ) -> None:
-    from smc_ict.composition.runtime_services import _subprocess_operation
-    from smc_ict.configuration.models import ScheduleJob
+    from trading_research.composition.runtime_services import _subprocess_operation
+    from trading_research.configuration.models import ScheduleJob
 
     class Process:
         returncode = -9
@@ -949,7 +949,7 @@ def test_timed_out_child_is_terminated_killed_drained_and_durably_reconciled(
     assert operation._command == [
         sys.executable,
         "-m",
-        "smc_ict.cli",
+        "trading_research.cli",
         "run",
         "--strategy",
         "/strategies/strategy.yaml",

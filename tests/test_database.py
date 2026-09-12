@@ -9,8 +9,8 @@ import pytest
 
 
 def test_sqlite_exact_schema_idempotent_pages_conflicts_and_contiguous_sync(tmp_path: Path) -> None:
-    from smc_ict.adapters.persistence.sqlite import SourceConflictError, SQLiteRepository
-    from smc_ict.domain import ClosedCandle
+    from trading_research.adapters.persistence.sqlite import SourceConflictError, SQLiteRepository
+    from trading_research.domain import ClosedCandle
 
     def candle(open_time_ms: int, close: str = "101") -> ClosedCandle:
         return ClosedCandle(
@@ -34,7 +34,7 @@ def test_sqlite_exact_schema_idempotent_pages_conflicts_and_contiguous_sync(tmp_
             },
         )
 
-    path = tmp_path / "smc_ict.db"
+    path = tmp_path / "trading_research.db"
     repository = SQLiteRepository(path)
     with sqlite3.connect(path) as connection:
         tables = {
@@ -84,7 +84,7 @@ def test_sqlite_exact_schema_idempotent_pages_conflicts_and_contiguous_sync(tmp_
 def test_sqlite_additive_notification_migration_preserves_existing_v1_rows(
     tmp_path: Path,
 ) -> None:
-    from smc_ict.adapters.persistence.sqlite import DDL, SQLiteRepository
+    from trading_research.adapters.persistence.sqlite import DDL, SQLiteRepository
 
     path = tmp_path / "legacy-v1.db"
     legacy_ddl = (
@@ -143,8 +143,11 @@ def test_sqlite_additive_notification_migration_preserves_existing_v1_rows(
 def test_sqlite_run_observation_and_decision_batches_are_idempotent_and_atomic(
     tmp_path: Path,
 ) -> None:
-    from smc_ict.adapters.persistence.sqlite import PersistenceConflictError, SQLiteRepository
-    from smc_ict.application.ports import DecisionRecord, ObservationRecord, RunRecord
+    from trading_research.adapters.persistence.sqlite import (
+        PersistenceConflictError,
+        SQLiteRepository,
+    )
+    from trading_research.application.ports import DecisionRecord, ObservationRecord, RunRecord
 
     repository = SQLiteRepository(tmp_path / "evidence.db")
     run = RunRecord(
@@ -213,8 +216,8 @@ def test_sqlite_run_observation_and_decision_batches_are_idempotent_and_atomic(
 
 
 def test_sqlite_canonicalizes_nested_immutable_payload_mappings(tmp_path: Path) -> None:
-    from smc_ict.adapters.persistence.sqlite import SQLiteRepository
-    from smc_ict.application.ports import ObservationRecord, RunRecord
+    from trading_research.adapters.persistence.sqlite import SQLiteRepository
+    from trading_research.application.ports import ObservationRecord, RunRecord
 
     repository = SQLiteRepository(tmp_path / "nested-evidence.db")
     repository.store_run(
@@ -256,8 +259,11 @@ def test_sqlite_canonicalizes_nested_immutable_payload_mappings(tmp_path: Path) 
 def test_commit_run_rejects_evidence_owned_by_another_running_run_before_any_write(
     tmp_path: Path, kind: str
 ) -> None:
-    from smc_ict.adapters.persistence.sqlite import PersistenceConflictError, SQLiteRepository
-    from smc_ict.application.ports import DecisionRecord, ObservationRecord, RunRecord
+    from trading_research.adapters.persistence.sqlite import (
+        PersistenceConflictError,
+        SQLiteRepository,
+    )
+    from trading_research.application.ports import DecisionRecord, ObservationRecord, RunRecord
 
     repository = SQLiteRepository(tmp_path / "cross-run-evidence.db")
 

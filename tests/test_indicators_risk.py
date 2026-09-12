@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from smc_ict.application.graph import RunContext
-from smc_ict.application.resampling import DerivedCandle
-from smc_ict.domain import Observation
+from trading_research.application.graph import RunContext
+from trading_research.application.resampling import DerivedCandle
+from trading_research.domain import Observation
 
 
 def candles() -> tuple[DerivedCandle, ...]:
@@ -74,7 +74,7 @@ def observed(
 
 
 def test_risk_levels_composes_exact_long_levels_and_accepts_reward_risk_boundary() -> None:
-    from smc_ict.indicators.risk import RiskLevelsPlugin
+    from trading_research.indicators.risk import RiskLevelsPlugin
 
     series = candles()
     context = RunContext("BTC-USDT-PERP", series[-1].close_time_ms, {"execution": series})
@@ -117,7 +117,7 @@ def test_risk_levels_composes_exact_long_levels_and_accepts_reward_risk_boundary
 def test_risk_levels_rejects_contradictory_direction_and_unavailable_dependency() -> None:
     from dataclasses import replace
 
-    from smc_ict.indicators.risk import RiskLevelsPlugin
+    from trading_research.indicators.risk import RiskLevelsPlugin
 
     series = candles()
     context = RunContext("BTC-USDT-PERP", series[-1].close_time_ms, {"execution": series})
@@ -174,7 +174,7 @@ def test_risk_levels_rejects_contradictory_direction_and_unavailable_dependency(
 
 
 def test_risk_levels_composes_exact_short_levels_symmetrically() -> None:
-    from smc_ict.indicators.risk import RiskLevelsPlugin
+    from trading_research.indicators.risk import RiskLevelsPlugin
 
     series = candles()
     context = RunContext("BTC-USDT-PERP", series[-1].close_time_ms, {"execution": series})
@@ -221,7 +221,7 @@ def test_risk_levels_composes_exact_short_levels_symmetrically() -> None:
 def test_risk_levels_requires_liquidity_sweep_known_strictly_before_fvg(
     liquidity_known: int, fvg_known: int, expected_status: str
 ) -> None:
-    from smc_ict.indicators.risk import RiskLevelsPlugin
+    from trading_research.indicators.risk import RiskLevelsPlugin
 
     series = candles()
     context = RunContext("BTC-USDT-PERP", series[-1].close_time_ms, {"execution": series})
@@ -259,7 +259,7 @@ def test_risk_levels_requires_liquidity_sweep_known_strictly_before_fvg(
 def test_risk_levels_rejects_missing_or_contradictory_fvg_market_structure_chain(
     dependency_ids: tuple[str, ...],
 ) -> None:
-    from smc_ict.indicators.risk import RiskLevelsPlugin
+    from trading_research.indicators.risk import RiskLevelsPlugin
 
     series = candles()
     context = RunContext("BTC-USDT-PERP", series[-1].close_time_ms, {"execution": series})

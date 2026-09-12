@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from smc_ict.domain import ClosedCandle
+from trading_research.domain import ClosedCandle
 
 
 def candle(minute: int, close: str = "100") -> ClosedCandle:
@@ -30,12 +30,12 @@ def candle(minute: int, close: str = "100") -> ClosedCandle:
 def test_online_backup_freezes_an_offline_read_only_range_without_mutating_source(
     tmp_path: Path,
 ) -> None:
-    from smc_ict.adapters.persistence.sqlite import (
+    from trading_research.adapters.persistence.sqlite import (
         SQLiteRepository,
         SQLiteSnapshotReader,
         create_sqlite_snapshot,
     )
-    from smc_ict.domain import hash_candles
+    from trading_research.domain import hash_candles
 
     source_path = tmp_path / "live.sqlite3"
     snapshot_path = tmp_path / "backtests" / "snapshot.sqlite3"
@@ -72,7 +72,10 @@ def test_online_backup_freezes_an_offline_read_only_range_without_mutating_sourc
 
 
 def test_snapshot_fails_closed_on_existing_destination(tmp_path: Path) -> None:
-    from smc_ict.adapters.persistence.sqlite import SQLiteRepository, create_sqlite_snapshot
+    from trading_research.adapters.persistence.sqlite import (
+        SQLiteRepository,
+        create_sqlite_snapshot,
+    )
 
     source_path = tmp_path / "live.sqlite3"
     destination = tmp_path / "snapshot.sqlite3"

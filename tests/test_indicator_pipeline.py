@@ -8,8 +8,8 @@ import pytest
 
 
 def test_configured_dag_executes_dependencies_in_topological_order_with_immutable_context() -> None:
-    from smc_ict.application.graph import ConfiguredNode, IndicatorGraph, RunContext
-    from smc_ict.domain import Observation
+    from trading_research.application.graph import ConfiguredNode, IndicatorGraph, RunContext
+    from trading_research.domain import Observation
 
     calls: list[tuple[str, tuple[str, ...]]] = []
     parameter_hash = ConfiguredNode("hash", "hash", "execution", (), {}, 1).parameter_hash
@@ -66,7 +66,7 @@ def test_configured_dag_executes_dependencies_in_topological_order_with_immutabl
 
 
 def test_configured_dag_rejects_unknown_missing_and_cyclic_dependencies() -> None:
-    from smc_ict.application.graph import (
+    from trading_research.application.graph import (
         ConfiguredNode,
         CyclicDependencyError,
         IndicatorGraph,
@@ -89,8 +89,8 @@ def test_configured_dag_rejects_unknown_missing_and_cyclic_dependencies() -> Non
 
 
 def test_plugin_instances_and_nested_parameters_are_isolated_per_execution() -> None:
-    from smc_ict.application.graph import ConfiguredNode, IndicatorGraph, RunContext
-    from smc_ict.domain import Observation
+    from trading_research.application.graph import ConfiguredNode, IndicatorGraph, RunContext
+    from trading_research.domain import Observation
 
     seen: list[tuple[int, object]] = []
     parameter_hash = ConfiguredNode(
@@ -139,8 +139,8 @@ def test_plugin_instances_and_nested_parameters_are_isolated_per_execution() -> 
 
 
 def test_graph_rejects_observation_that_does_not_match_node_evidence() -> None:
-    from smc_ict.application.graph import ConfiguredNode, IndicatorGraph, RunContext
-    from smc_ict.domain import Observation
+    from trading_research.application.graph import ConfiguredNode, IndicatorGraph, RunContext
+    from trading_research.domain import Observation
 
     class MismatchedPlugin:
         def evaluate(self, context: RunContext, _dependencies: object) -> Observation:
@@ -172,8 +172,8 @@ def test_graph_rejects_observation_that_does_not_match_node_evidence() -> None:
 
 
 def test_graph_rejects_observation_timeframe_that_does_not_match_configured_role() -> None:
-    from smc_ict.application.graph import ConfiguredNode, IndicatorGraph, RunContext
-    from smc_ict.domain import Observation
+    from trading_research.application.graph import ConfiguredNode, IndicatorGraph, RunContext
+    from trading_research.domain import Observation
 
     node = ConfiguredNode("instance", "fixture", "regime", (), {}, 1, timeframe="1h")
 
@@ -204,7 +204,7 @@ def test_graph_rejects_observation_timeframe_that_does_not_match_configured_role
 
 
 def test_graph_rejects_plugin_role_that_does_not_match_configured_node() -> None:
-    from smc_ict.application.graph import ConfiguredNode, IndicatorGraph, RunContext
+    from trading_research.application.graph import ConfiguredNode, IndicatorGraph, RunContext
 
     class ContextPlugin:
         role = "context"
@@ -222,7 +222,7 @@ def test_graph_rejects_plugin_role_that_does_not_match_configured_node() -> None
 
 
 def test_graph_hash_is_canonical_and_changes_only_with_configured_instances() -> None:
-    from smc_ict.application.graph import ConfiguredNode, IndicatorGraph
+    from trading_research.application.graph import ConfiguredNode, IndicatorGraph
 
     def factory(_parameters: object) -> object:
         return object()
@@ -253,7 +253,7 @@ def test_graph_hash_is_canonical_and_changes_only_with_configured_instances() ->
 def test_observation_hash_is_deterministic_for_decimal_text_and_knowledge_time() -> None:
     from dataclasses import replace
 
-    from smc_ict.domain import DecimalText, Observation, hash_observation
+    from trading_research.domain import DecimalText, Observation, hash_observation
 
     base = Observation.available(
         signal_id="fixture.signal",
@@ -280,7 +280,7 @@ def test_observation_hash_is_deterministic_for_decimal_text_and_knowledge_time()
 
 
 def test_indicator_and_decision_plugin_contracts_are_runtime_checkable() -> None:
-    from smc_ict.application.ports import DecisionPlugin, IndicatorPlugin
+    from trading_research.application.ports import DecisionPlugin, IndicatorPlugin
 
     class Plugin:
         plugin_id = "fixture"
@@ -296,9 +296,9 @@ def test_indicator_and_decision_plugin_contracts_are_runtime_checkable() -> None
 
 
 def test_ordered_decision_policy_stops_at_first_required_unavailable_observation() -> None:
-    from smc_ict.application.decision_policy import DecisionSignal, OrderedDecisionPlugin
-    from smc_ict.application.graph import RunContext
-    from smc_ict.domain import Observation, hash_decision
+    from trading_research.application.decision_policy import DecisionSignal, OrderedDecisionPlugin
+    from trading_research.application.graph import RunContext
+    from trading_research.domain import Observation, hash_decision
 
     unavailable = Observation.available(
         signal_id="first",
@@ -337,9 +337,9 @@ def test_ordered_decision_policy_stops_at_first_required_unavailable_observation
 def test_ordered_decision_policy_rejects_on_first_required_failure() -> None:
     from dataclasses import replace
 
-    from smc_ict.application.decision_policy import DecisionSignal, OrderedDecisionPlugin
-    from smc_ict.application.graph import RunContext
-    from smc_ict.domain import Observation
+    from trading_research.application.decision_policy import DecisionSignal, OrderedDecisionPlugin
+    from trading_research.application.graph import RunContext
+    from trading_research.domain import Observation
 
     failed = Observation.available(
         signal_id="rejector",
@@ -379,9 +379,9 @@ def test_ordered_decision_policy_rejects_on_first_required_failure() -> None:
 def test_ordered_decision_policy_uses_configured_level_output_without_inventing_values() -> None:
     from dataclasses import replace
 
-    from smc_ict.application.decision_policy import DecisionSignal, OrderedDecisionPlugin
-    from smc_ict.application.graph import RunContext
-    from smc_ict.domain import Observation
+    from trading_research.application.decision_policy import DecisionSignal, OrderedDecisionPlugin
+    from trading_research.application.graph import RunContext
+    from trading_research.domain import Observation
 
     passed = Observation.available(
         signal_id="gate",
@@ -433,9 +433,9 @@ def test_ordered_decision_policy_uses_configured_level_output_without_inventing_
 
 
 def test_all_seven_source_aligned_modules_are_registered_as_real_factories() -> None:
-    from smc_ict.application.ports import IndicatorPlugin
-    from smc_ict.composition import indicator_composition_root
-    from smc_ict.configuration import IMPLEMENTED_PLUGIN_IDS, load_strategy
+    from trading_research.application.ports import IndicatorPlugin
+    from trading_research.composition import indicator_composition_root
+    from trading_research.configuration import IMPLEMENTED_PLUGIN_IDS, load_strategy
 
     root = indicator_composition_root()
 
@@ -466,9 +466,9 @@ def test_first_party_provenance_records_preserve_attribution_and_publication_bou
 
 
 def test_strategy_configuration_wires_graph_and_decision_order_without_source_branches() -> None:
-    from smc_ict.application.decision_policy import configured_decision_signals
-    from smc_ict.application.graph import configured_nodes
-    from smc_ict.configuration import load_strategy
+    from trading_research.application.decision_policy import configured_decision_signals
+    from trading_research.application.graph import configured_nodes
+    from trading_research.configuration import load_strategy
 
     strategy = load_strategy(Path(__file__).parents[1] / "strategies/source-aligned-research.yaml")
 
@@ -487,11 +487,11 @@ def test_strategy_configuration_wires_graph_and_decision_order_without_source_br
 
 
 def test_active_strategy_has_exact_multitimeframe_composition_and_runs_all_factories() -> None:
-    from smc_ict.application.graph import IndicatorGraph, RunContext, configured_nodes
-    from smc_ict.application.resampling import DerivedCandle
-    from smc_ict.composition import indicator_composition_root
-    from smc_ict.configuration import load_strategy
-    from smc_ict.domain import Timeframe, hash_observation
+    from trading_research.application.graph import IndicatorGraph, RunContext, configured_nodes
+    from trading_research.application.resampling import DerivedCandle
+    from trading_research.composition import indicator_composition_root
+    from trading_research.configuration import load_strategy
+    from trading_research.domain import Timeframe, hash_observation
 
     strategy = load_strategy(Path(__file__).parents[1] / "strategies/source-aligned-research.yaml")
     assert strategy.history_minutes == 90 * 24 * 60
@@ -632,15 +632,15 @@ def test_active_strategy_has_exact_multitimeframe_composition_and_runs_all_facto
 def test_seven_node_graph_replay_is_byte_deterministic_end_to_end() -> None:
     import json
 
-    from smc_ict.application.decision_policy import (
+    from trading_research.application.decision_policy import (
         OrderedDecisionPlugin,
         configured_decision_signals,
     )
-    from smc_ict.application.graph import IndicatorGraph, RunContext, configured_nodes
-    from smc_ict.application.resampling import DerivedCandle
-    from smc_ict.composition import indicator_composition_root
-    from smc_ict.configuration import load_strategy
-    from smc_ict.domain import Timeframe, hash_decision, hash_observation
+    from trading_research.application.graph import IndicatorGraph, RunContext, configured_nodes
+    from trading_research.application.resampling import DerivedCandle
+    from trading_research.composition import indicator_composition_root
+    from trading_research.configuration import load_strategy
+    from trading_research.domain import Timeframe, hash_decision, hash_observation
 
     strategy = load_strategy(Path(__file__).parents[1] / "strategies/source-aligned-research.yaml")
     root = indicator_composition_root()
@@ -701,10 +701,10 @@ def test_seven_node_graph_replay_is_byte_deterministic_end_to_end() -> None:
 def test_observation_and_decision_records_persist_idempotently_with_canonical_evidence(
     tmp_path: Path,
 ) -> None:
-    from smc_ict.adapters.persistence.sqlite import SQLiteRepository
-    from smc_ict.application.evidence import persist_evidence
-    from smc_ict.application.ports import RunRecord
-    from smc_ict.domain import Decision, Observation, hash_decision, hash_observation
+    from trading_research.adapters.persistence.sqlite import SQLiteRepository
+    from trading_research.application.evidence import persist_evidence
+    from trading_research.application.ports import RunRecord
+    from trading_research.domain import Decision, Observation, hash_decision, hash_observation
 
     repository = SQLiteRepository(tmp_path / "analysis.sqlite3")
     repository.store_run(
@@ -765,7 +765,7 @@ def test_observation_and_decision_records_persist_idempotently_with_canonical_ev
 
 
 def test_evidence_payload_rejects_noncanonical_numbers() -> None:
-    from smc_ict.domain import Decision, Observation
+    from trading_research.domain import Decision, Observation
 
     with pytest.raises(TypeError, match="canonical JSON"):
         Observation.available(
@@ -800,7 +800,7 @@ def test_evidence_payload_rejects_noncanonical_numbers() -> None:
 
 
 def test_observation_canonicalizes_explicit_decimal_levels() -> None:
-    from smc_ict.domain import Observation
+    from trading_research.domain import Observation
 
     observation = Observation.available(
         signal_id="fixture.signal",
@@ -831,7 +831,7 @@ def test_observation_canonicalizes_explicit_decimal_levels() -> None:
 
 
 def test_core_pipeline_has_no_provider_or_source_platform_conditionals() -> None:
-    application = Path(__file__).parents[1] / "src/smc_ict/application"
+    application = Path(__file__).parents[1] / "src/trading_research/application"
     forbidden = ("if provider ==", "if source ==", "tradingview", "binance", "okx")
 
     for path in application.rglob("*.py"):

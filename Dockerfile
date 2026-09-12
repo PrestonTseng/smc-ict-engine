@@ -16,10 +16,10 @@ COPY uv.lock ./
 COPY pyproject.toml README.md ./
 COPY src ./src
 RUN uv sync --locked --no-dev --no-editable \
-    && groupadd --gid 10001 smc-ict \
-    && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin smc-ict \
+    && groupadd --gid 10001 trading-research \
+    && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin trading-research \
     && mkdir -p /data \
     && chown 10001:10001 /data
 
 USER 10001:10001
-ENTRYPOINT ["smc-ict"]
+ENTRYPOINT ["trading-research"]

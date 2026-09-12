@@ -9,8 +9,8 @@ from urllib.request import Request
 
 import pytest
 
-from smc_ict.application.ports import NotificationEvent
-from smc_ict.configuration.models import (
+from trading_research.application.ports import NotificationEvent
+from trading_research.configuration.models import (
     BatchingConfig,
     DeduplicationConfig,
     NotificationDestination,
@@ -48,7 +48,7 @@ def _destination(*, attempts: int = 1, maximum_events: int = 10) -> Notification
 def test_discord_formatter_uses_stable_native_embed_for_each_event(
     event_type: str, expected_title: str, expected_color: int
 ) -> None:
-    from smc_ict.adapters.notifications.discord_webhook import format_discord_payload
+    from trading_research.adapters.notifications.discord_webhook import format_discord_payload
 
     event = NotificationEvent(
         event_type,
@@ -73,7 +73,7 @@ def test_discord_formatter_uses_stable_native_embed_for_each_event(
 
 
 def test_discord_formatter_bounds_embeds_fields_and_disables_mentions() -> None:
-    from smc_ict.adapters.notifications.discord_webhook import format_discord_payload
+    from trading_research.adapters.notifications.discord_webhook import format_discord_payload
 
     injected = '@everyone <@123> "quoted"\n' + "x" * 5_000
     events = tuple(
@@ -116,7 +116,7 @@ def test_discord_formatter_bounds_embeds_fields_and_disables_mentions() -> None:
 
 
 def test_discord_formatter_renders_ready_decision_debug_evidence() -> None:
-    from smc_ict.adapters.notifications.discord_webhook import format_discord_payload
+    from trading_research.adapters.notifications.discord_webhook import format_discord_payload
 
     event = NotificationEvent(
         "decision_found",
@@ -158,7 +158,7 @@ def test_discord_formatter_renders_ready_decision_debug_evidence() -> None:
 
 @pytest.mark.parametrize("status", ["NO_TRADE", "UNAVAILABLE"])
 def test_discord_formatter_renders_no_decision_failure_evidence(status: str) -> None:
-    from smc_ict.adapters.notifications.discord_webhook import format_discord_payload
+    from trading_research.adapters.notifications.discord_webhook import format_discord_payload
 
     event = NotificationEvent(
         "no_decision",
@@ -184,7 +184,7 @@ def test_discord_formatter_renders_no_decision_failure_evidence(status: str) -> 
 
 
 def test_discord_adapter_posts_native_json_and_accepts_204() -> None:
-    from smc_ict.adapters.notifications.discord_webhook import DiscordWebhookNotifier
+    from trading_research.adapters.notifications.discord_webhook import DiscordWebhookNotifier
 
     requests: list[Any] = []
 
@@ -233,9 +233,9 @@ def test_discord_adapter_posts_native_json_and_accepts_204() -> None:
 
 
 def test_discord_adapter_user_agent_closes_fake_https_403_to_204_differential() -> None:
-    from smc_ict.adapters.notifications.discord_webhook import DiscordWebhookNotifier
+    from trading_research.adapters.notifications.discord_webhook import DiscordWebhookNotifier
 
-    expected_user_agent = "smc-ict-engine/0.1 discord-webhook"
+    expected_user_agent = "trading-research-engine/0.2.0 discord-webhook"
     observed_user_agents: list[str | None] = []
 
     class Response:
@@ -276,7 +276,7 @@ def test_discord_adapter_user_agent_closes_fake_https_403_to_204_differential() 
 
 
 def test_discord_adapter_honors_rate_limit_then_retries_server_failure() -> None:
-    from smc_ict.adapters.notifications.discord_webhook import DiscordWebhookNotifier
+    from trading_research.adapters.notifications.discord_webhook import DiscordWebhookNotifier
 
     attempts = [0]
     sleeps: list[int] = []
@@ -315,7 +315,7 @@ def test_discord_adapter_honors_rate_limit_then_retries_server_failure() -> None
 
 
 def test_discord_adapter_does_not_retry_non_retryable_failure() -> None:
-    from smc_ict.adapters.notifications.discord_webhook import DiscordWebhookNotifier
+    from trading_research.adapters.notifications.discord_webhook import DiscordWebhookNotifier
 
     attempts = [0]
     sleeps: list[int] = []
@@ -340,7 +340,7 @@ def test_discord_adapter_does_not_retry_non_retryable_failure() -> None:
 
 
 def test_discord_adapter_rejects_batch_above_destination_bound_before_transport() -> None:
-    from smc_ict.adapters.notifications.discord_webhook import DiscordWebhookNotifier
+    from trading_research.adapters.notifications.discord_webhook import DiscordWebhookNotifier
 
     def opened(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("invalid batch must not reach transport")
@@ -358,10 +358,10 @@ def test_discord_adapter_rejects_batch_above_destination_bound_before_transport(
 
 
 def test_loaded_discord_config_routes_only_formatter_compatible_batches() -> None:
-    from smc_ict.application.notifications import NotificationRouter
-    from smc_ict.application.ports import Notifier
-    from smc_ict.composition.registries import notification_composition_root
-    from smc_ict.configuration import load_notifications_text
+    from trading_research.application.notifications import NotificationRouter
+    from trading_research.application.ports import Notifier
+    from trading_research.composition.registries import notification_composition_root
+    from trading_research.configuration import load_notifications_text
 
     source = (
         Path("config/notifications.yaml")

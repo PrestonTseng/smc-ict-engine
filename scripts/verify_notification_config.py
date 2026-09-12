@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from smc_ict.adapters.notifications import DiscordWebhookNotifier
-from smc_ict.configuration import StrictConfigurationError, load_notifications_text
-from smc_ict.configuration.models import NotificationDestination, SecretRef
+from trading_research.adapters.notifications import DiscordWebhookNotifier
+from trading_research.configuration import StrictConfigurationError, load_notifications_text
+from trading_research.configuration.models import NotificationDestination, SecretRef
 
 ROOT = Path(__file__).parents[1]
 EXAMPLE = ROOT / "config" / "notifications.yaml"

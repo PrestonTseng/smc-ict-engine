@@ -5,9 +5,9 @@ from decimal import Decimal
 
 import pytest
 
-from smc_ict.application.graph import ConfiguredNode, RunContext
-from smc_ict.application.resampling import DerivedCandle
-from smc_ict.domain import Observation
+from trading_research.application.graph import ConfiguredNode, RunContext
+from trading_research.application.resampling import DerivedCandle
+from trading_research.domain import Observation
 
 
 def candles(
@@ -57,7 +57,7 @@ def dependency(signal_id: str, *, status: str = "PASS") -> Observation:
 
 
 def test_swing_structure_is_unavailable_until_first_size_confirmed_pivot() -> None:
-    from smc_ict.indicators.smc import SwingStructurePlugin
+    from trading_research.indicators.smc import SwingStructurePlugin
 
     parameters = {"swing_length": 10, "show_labels": True}
     series = candles([("10", "11", "9", "10")] * 10)
@@ -75,7 +75,7 @@ def test_swing_structure_is_unavailable_until_first_size_confirmed_pivot() -> No
 
 
 def test_swing_structure_reports_pivot_at_source_bar_when_confirmation_bar_closes() -> None:
-    from smc_ict.indicators.smc import SwingStructurePlugin
+    from trading_research.indicators.smc import SwingStructurePlugin
 
     parameters = {"swing_length": 10, "show_labels": True}
     values = [("10", "11", "8", "10")]
@@ -94,7 +94,7 @@ def test_swing_structure_reports_pivot_at_source_bar_when_confirmation_bar_close
 
 
 def test_swing_structure_emits_choch_then_bos_only_on_closed_close_crossings() -> None:
-    from smc_ict.indicators.smc import SwingStructurePlugin
+    from trading_research.indicators.smc import SwingStructurePlugin
 
     parameters = {"swing_length": 10, "show_labels": True}
     values = [("10", "11", "8", "10")]
@@ -142,7 +142,7 @@ def test_swing_structure_emits_choch_then_bos_only_on_closed_close_crossings() -
 
 
 def test_equal_high_low_uses_strict_atr_threshold_boundaries() -> None:
-    from smc_ict.indicators.smc import _strictly_equal
+    from trading_research.indicators.smc import _strictly_equal
 
     assert _strictly_equal(Decimal("100"), Decimal("100.999"), Decimal("10"), Decimal("0.1"))
     assert not _strictly_equal(Decimal("100"), Decimal("101"), Decimal("10"), Decimal("0.1"))
@@ -150,7 +150,7 @@ def test_equal_high_low_uses_strict_atr_threshold_boundaries() -> None:
 
 
 def test_equal_high_low_requires_atr_warmup_then_reports_source_and_confirmation_times() -> None:
-    from smc_ict.indicators.smc import EqualHighLowPlugin
+    from trading_research.indicators.smc import EqualHighLowPlugin
 
     parameters = {"confirmation_bars": 3, "threshold_atr_fraction": "0.5"}
     warmup = candles([("100", "110", "90", "100")] * 199, interval="1h")
@@ -189,7 +189,7 @@ def test_equal_high_low_requires_atr_warmup_then_reports_source_and_confirmation
 
 
 def test_order_block_selects_source_extreme_and_uses_strict_close_mitigation() -> None:
-    from smc_ict.indicators.smc import OrderBlockPlugin
+    from trading_research.indicators.smc import OrderBlockPlugin
 
     parameters = {
         "scope": "internal",
@@ -242,7 +242,7 @@ def test_order_block_selects_source_extreme_and_uses_strict_close_mitigation() -
 
 
 def test_swing_event_history_is_prefix_invariant_and_parameter_ints_reject_booleans() -> None:
-    from smc_ict.indicators.smc import SwingStructurePlugin, _swing_events
+    from trading_research.indicators.smc import SwingStructurePlugin, _swing_events
 
     values = [("10", "11", "8", "10")]
     values.extend(("10", "11", "9", "10") for _ in range(10))
@@ -262,7 +262,7 @@ def test_swing_event_history_is_prefix_invariant_and_parameter_ints_reject_boole
 
 
 def test_equal_high_low_fails_closed_for_unavailable_or_mismatched_dependencies() -> None:
-    from smc_ict.indicators.smc import EqualHighLowPlugin
+    from trading_research.indicators.smc import EqualHighLowPlugin
 
     parameters = {"confirmation_bars": 3, "threshold_atr_fraction": "0.1"}
     plugin = EqualHighLowPlugin(parameters)
@@ -284,7 +284,7 @@ def test_equal_high_low_fails_closed_for_unavailable_or_mismatched_dependencies(
 def test_equal_high_low_rejects_future_dependency_evidence_as_a_failure() -> None:
     from dataclasses import replace
 
-    from smc_ict.indicators.smc import EqualHighLowPlugin
+    from trading_research.indicators.smc import EqualHighLowPlugin
 
     parameters = {"confirmation_bars": 3, "threshold_atr_fraction": "0.1"}
     series = candles([("100", "110", "90", "100")] * 200, interval="1h")
@@ -305,7 +305,7 @@ def test_equal_high_low_rejects_future_dependency_evidence_as_a_failure() -> Non
 def test_equal_high_low_rejects_dependency_timeframe_mismatch() -> None:
     from dataclasses import replace
 
-    from smc_ict.indicators.smc import EqualHighLowPlugin
+    from trading_research.indicators.smc import EqualHighLowPlugin
 
     series = candles([("100", "110", "90", "100")] * 200, interval="1h")
     wrong_timeframe = replace(dependency("smc.swing_structure"), timeframe="5m")

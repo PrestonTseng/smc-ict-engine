@@ -1,6 +1,6 @@
-# smc-ict-engine
+# Trading Research Engine
 
-`smc-ict-engine` is a command-line research engine for deterministic evaluation of completed public-market candles. It does not trade.
+Trading Research Engine is a command-line research engine for deterministic evaluation of completed public-market candles. The distribution and image slug is `trading-research-engine`. It does not trade.
 
 The engine stores research receipts in SQLite. It has no web service, order path, broker credentials, or live-trading feature.
 
@@ -23,15 +23,15 @@ The Compose service owns the internal scheduler. Do not install host cron for th
 
 The fixed database contract is:
 
-- Host path: `${DATA_FOLDER}/smc_ict.db`
-- Container path: `/data/smc_ict.db`
+- Host path: `${DATA_FOLDER}/trading_research.db`
+- Container path: `/data/trading_research.db`
 - Bind mount: `${DATA_FOLDER}:/data` (the only writable application bind)
 
 Bootstrap the writable data directory and the one Discord secret before you start Compose. The
 container runs as UID/GID `10001:10001`, so the host bind must be writable by that identity:
 
 ```bash
-export DATA_FOLDER="/absolute/path/to/smc-ict-data"
+export DATA_FOLDER="/absolute/path/to/trading-research-data"
 sudo install -d -m 0750 -o 10001 -g 10001 "$DATA_FOLDER"
 install -d -m 0700 secrets
 umask 077
@@ -53,7 +53,7 @@ Read readiness and logs:
 
 ```sh
 docker compose ps
-uv run smc-ict database status
+uv run trading-research database status
 docker compose logs --follow engine
 ```
 
@@ -74,7 +74,7 @@ Validate all configured files before an operation:
 
 ```sh
 uv sync --dev
-uv run smc-ict validate \
+uv run trading-research validate \
   --strategy strategies/source-aligned-research.yaml \
   --market-data config/market-data.yaml \
   --schedule config/schedule.yaml \
@@ -93,11 +93,11 @@ Bootstrap or inspect a local database:
 ```sh
 export DATA_FOLDER="$(pwd)/data"
 export CONFIG_FOLDER="$(pwd)/config"
-uv run smc-ict database bootstrap
-uv run smc-ict database status
+uv run trading-research database bootstrap
+uv run trading-research database status
 ```
 
-Host commands derive `smc_ict.db`, `engine.lock`, and `scheduler.ready` only from
+Host commands derive `trading_research.db`, `engine.lock`, and `scheduler.ready` only from
 `DATA_FOLDER`; commands that compose runtime services derive their configuration root only from
 `CONFIG_FOLDER`. Both roots must be normalized absolute paths. Operation-level path overrides are
 intentionally rejected.
@@ -105,7 +105,7 @@ intentionally rejected.
 The notifier dry test validates a bounded event payload without a delivery attempt:
 
 ```sh
-uv run smc-ict notifier-test \
+uv run trading-research notifier-test \
   --notifications config/notifications.yaml \
   --event run_succeeded \
   --run-id fixture-run \
@@ -118,7 +118,7 @@ Run a manual receipt path:
 ```sh
 export DATA_FOLDER="$(pwd)/data"
 export CONFIG_FOLDER="$(pwd)/config"
-uv run smc-ict run \
+uv run trading-research run \
   --strategy strategies/source-aligned-research.yaml \
   --notifications config/notifications.yaml \
   --trigger manual
@@ -136,7 +136,7 @@ Backtests use the same global `config/market-data.yaml`, canonical candle store,
 export DATA_FOLDER="$(pwd)/data"
 export CONFIG_FOLDER="$(pwd)/config"
 export SMC_ICT_GIT_COMMIT="$(git rev-parse HEAD)"
-uv run smc-ict backtest backtests/source-aligned-research/one-year-baseline.yaml
+uv run trading-research backtest backtests/source-aligned-research/one-year-baseline.yaml
 ```
 
 V1 accepts only `touch_limit` entries. A pending entry expires after the configured number of
@@ -203,7 +203,7 @@ Start the scheduler outside Compose only for local diagnosis:
 ```sh
 export DATA_FOLDER="$(pwd)/data"
 export CONFIG_FOLDER="$(pwd)/config"
-uv run smc-ict scheduler \
+uv run trading-research scheduler \
   --schedule config/schedule.yaml
 ```
 
@@ -211,7 +211,7 @@ While that scheduler is running, read its readiness marker from another shell wi
 `DATA_FOLDER`:
 
 ```sh
-uv run smc-ict scheduler-health
+uv run trading-research scheduler-health
 ```
 
 ## Strategy DAG authoring
@@ -237,15 +237,15 @@ Stop the engine before a backup or restore. SQLite backups must use a consistent
 ```sh
 docker compose stop engine
 mkdir -p backups
-sqlite3 "$DATA_FOLDER/smc_ict.db" '.backup backups/smc_ict.db'
-sqlite3 backups/smc_ict.db 'PRAGMA integrity_check;'
+sqlite3 "$DATA_FOLDER/trading_research.db" '.backup backups/trading_research.db'
+sqlite3 backups/trading_research.db 'PRAGMA integrity_check;'
 ```
 
 Restore only after you stop the service:
 
 ```sh
 docker compose stop engine
-cp backups/smc_ict.db "$DATA_FOLDER/smc_ict.db"
+cp backups/trading_research.db "$DATA_FOLDER/trading_research.db"
 docker compose up -d engine
 ```
 
