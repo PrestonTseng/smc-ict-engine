@@ -8,6 +8,30 @@ from types import MappingProxyType
 import pytest
 
 
+def _readonly_database_state(path: Path) -> tuple[int, tuple[str, ...]]:
+    uri = f"{path.resolve().as_uri()}?mode=ro&immutable=1"
+    with sqlite3.connect(uri, uri=True) as connection:
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+        statements = tuple(connection.iterdump())
+    return version, statements
+
+
+def _assert_repository_rejection_preserves_database(path: Path) -> None:
+    from trading_research.adapters.persistence.sqlite import SQLiteRepository
+
+    before_bytes = path.read_bytes()
+    before_state = _readonly_database_state(path)
+    sidecars = tuple(Path(f"{path}{suffix}") for suffix in ("-wal", "-shm", "-journal"))
+    assert not any(sidecar.exists() for sidecar in sidecars)
+
+    with pytest.raises(RuntimeError, match="unsupported or malformed SQLite schema"):
+        SQLiteRepository(path)
+
+    assert path.read_bytes() == before_bytes
+    assert _readonly_database_state(path) == before_state
+    assert not any(sidecar.exists() for sidecar in sidecars)
+
+
 def test_sqlite_exact_schema_idempotent_pages_conflicts_and_contiguous_sync(tmp_path: Path) -> None:
     from trading_research.adapters.persistence.sqlite import SourceConflictError, SQLiteRepository
     from trading_research.domain import ClosedCandle
@@ -120,12 +144,16 @@ def test_sqlite_v1_to_v2_migration_preserves_legacy_provenance_and_related_rows(
             ),
         )
         connection.execute(
-            "INSERT INTO observations VALUES (?,?,?,?,?,?,?,?)",
-            ("legacy-run", "BTC-USDT-PERP", "signal.one", "PASS", 1, 1, "legacy", "{}"),
+            "INSERT INTO observations (rowid,run_id,instrument_id,signal_id,status,event_time_ms,"
+            "known_time_ms,reason,payload_json) VALUES (?,?,?,?,?,?,?,?,?)",
+            (43, "legacy-run", "BTC-USDT-PERP", "signal.one", "PASS", 1, 1, "legacy", "{}"),
         )
         connection.execute(
-            "INSERT INTO decisions VALUES (?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO decisions "
+            "(rowid,run_id,instrument_id,decision_status,direction,entry_text,"
+            "stop_text,target_text,first_failed_signal,payload_json) VALUES (?,?,?,?,?,?,?,?,?,?)",
             (
+                44,
                 "legacy-run",
                 "BTC-USDT-PERP",
                 "NO_TRADE",
@@ -147,9 +175,16 @@ def test_sqlite_v1_to_v2_migration_preserves_legacy_provenance_and_related_rows(
             "SELECT rowid,status,strategy_name,git_commit,code_hash,notification_dedup_json,"
             "notification_outcomes_json,scheduler_outcome FROM runs WHERE run_id='legacy-run'"
         ).fetchone()
-        observations = connection.execute("SELECT * FROM observations").fetchall()
-        decisions = connection.execute("SELECT * FROM decisions").fetchall()
-        indexes = {row[1] for row in connection.execute("PRAGMA index_list(runs)")}
+        observations = connection.execute("SELECT rowid,* FROM observations").fetchall()
+        decisions = connection.execute("SELECT rowid,* FROM decisions").fetchall()
+        indexes = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='index' AND sql IS NOT NULL"
+            )
+        }
+        observation_fks = connection.execute("PRAGMA foreign_key_list(observations)").fetchall()
+        decision_fks = connection.execute("PRAGMA foreign_key_list(decisions)").fetchall()
         version = connection.execute("PRAGMA user_version").fetchone()
         integrity = connection.execute("PRAGMA integrity_check").fetchone()
         foreign_keys = connection.execute("PRAGMA foreign_key_check").fetchall()
@@ -165,11 +200,121 @@ def test_sqlite_v1_to_v2_migration_preserves_legacy_provenance_and_related_rows(
         '"outcome":"DELIVERED"}]',
         "SUCCEEDED",
     )
-    assert len(observations) == len(decisions) == 1
-    assert "idx_runs_strategy_completed" in indexes
+    assert observations == [
+        (43, "legacy-run", "BTC-USDT-PERP", "signal.one", "PASS", 1, 1, "legacy", "{}")
+    ]
+    assert decisions == [
+        (44, "legacy-run", "BTC-USDT-PERP", "NO_TRADE", None, None, None, None, "signal.one", "{}")
+    ]
+    assert indexes == {
+        "idx_candles_1m_active_range",
+        "idx_runs_strategy_completed",
+        "idx_observations_signal_event",
+    }
+    assert [tuple(row[2:7]) for row in observation_fks] == [
+        ("runs", "run_id", "run_id", "NO ACTION", "CASCADE")
+    ]
+    assert [tuple(row[2:7]) for row in decision_fks] == [
+        ("runs", "run_id", "run_id", "NO ACTION", "CASCADE")
+    ]
     assert version == (2,)
     assert integrity == ("ok",)
     assert foreign_keys == []
+
+
+def test_sqlite_rejects_v1_without_observation_run_foreign_key_before_mutation(
+    tmp_path: Path,
+) -> None:
+    from trading_research.adapters.persistence.sqlite import V1_DDL
+
+    path = tmp_path / "missing-observation-run-fk-v1.db"
+    malformed = V1_DDL.replace(
+        "    FOREIGN KEY (run_id) REFERENCES runs(run_id) ON DELETE CASCADE,\n",
+        "",
+        1,
+    )
+    with sqlite3.connect(path) as connection:
+        connection.executescript(f"{malformed}\nPRAGMA user_version=1;")
+        connection.execute(
+            "INSERT INTO observations VALUES (?,?,?,?,?,?,?,?)",
+            ("orphan-run", "BTC-USDT-PERP", "signal.one", "PASS", 1, 1, "orphan", "{}"),
+        )
+
+    _assert_repository_rejection_preserves_database(path)
+
+
+@pytest.mark.parametrize(
+    ("defect", "old", "new"),
+    (
+        (
+            "missing-index",
+            "CREATE INDEX idx_observations_signal_event ON observations(signal_id, event_time_ms);",
+            "",
+        ),
+        (
+            "changed-index",
+            "ON observations(signal_id, event_time_ms);",
+            "ON observations(event_time_ms, signal_id);",
+        ),
+        (
+            "changed-check",
+            "CHECK (status IN ('PASS','FAIL','UNAVAILABLE'))",
+            "CHECK (status IN ('PASS','FAIL'))",
+        ),
+        ("missing-strict", ") STRICT;", ");"),
+        (
+            "unexpected-column",
+            "    provider_symbol TEXT NOT NULL,\n",
+            "    provider_symbol TEXT NOT NULL,\n    unexpected TEXT,\n",
+        ),
+        (
+            "partial-early-v1",
+            "    notification_outcomes_json TEXT NOT NULL DEFAULT '[]',\n",
+            "",
+        ),
+        (
+            "changed-type",
+            "    provider_symbol TEXT NOT NULL,\n",
+            "    provider_symbol BLOB NOT NULL,\n",
+        ),
+        (
+            "changed-nullability",
+            "    quote_volume TEXT,\n",
+            "    quote_volume TEXT NOT NULL,\n",
+        ),
+        (
+            "changed-default",
+            "    notification_dedup_json TEXT NOT NULL DEFAULT '[]',\n",
+            "    notification_dedup_json TEXT NOT NULL DEFAULT '[1]',\n",
+        ),
+        (
+            "changed-primary-key",
+            "    run_id TEXT PRIMARY KEY,\n",
+            "    run_id TEXT UNIQUE,\n",
+        ),
+    ),
+)
+def test_sqlite_rejects_other_malformed_v1_shapes_before_mutation(
+    tmp_path: Path,
+    defect: str,
+    old: str,
+    new: str,
+) -> None:
+    from trading_research.adapters.persistence.sqlite import V1_DDL
+
+    path = tmp_path / f"{defect}-v1.db"
+    malformed = V1_DDL.replace(old, new, 1)
+    if defect == "partial-early-v1":
+        malformed = malformed.replace(
+            "    CHECK (json_valid(notification_outcomes_json)),\n",
+            "",
+            1,
+        )
+    assert malformed != V1_DDL
+    with sqlite3.connect(path) as connection:
+        connection.executescript(f"{malformed}\nPRAGMA user_version=1;")
+
+    _assert_repository_rejection_preserves_database(path)
 
 
 def test_sqlite_v1_to_v2_migration_rolls_back_every_change_on_failure(
@@ -221,6 +366,32 @@ def test_sqlite_v1_to_v2_migration_rolls_back_every_change_on_failure(
         assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
 
 
+def test_sqlite_v1_to_v2_migration_validates_canonical_v2_before_commit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from trading_research.adapters.persistence import sqlite as sqlite_adapter
+
+    path = tmp_path / "noncanonical-result-v1.db"
+    with sqlite3.connect(path) as connection:
+        connection.executescript(f"{sqlite_adapter.V1_DDL}\nPRAGMA user_version=1;")
+    before_state = _readonly_database_state(path)
+    monkeypatch.setattr(
+        sqlite_adapter,
+        "_RUNS_V2_DDL",
+        sqlite_adapter._RUNS_V2_DDL.replace("length(code_hash)=64", "length(code_hash)>=64"),
+    )
+
+    with pytest.raises(RuntimeError, match="unsupported or malformed SQLite schema"):
+        sqlite_adapter.SQLiteRepository(path)
+
+    assert _readonly_database_state(path) == before_state
+    with sqlite3.connect(path) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='runs_v2'"
+        ).fetchone() == (0,)
+
+
 def test_sqlite_v1_to_v2_migration_accepts_v1_before_notification_outcome_columns(
     tmp_path: Path,
 ) -> None:
@@ -241,11 +412,12 @@ def test_sqlite_v1_to_v2_migration_accepts_v1_before_notification_outcome_column
     with sqlite3.connect(path) as connection:
         connection.executescript(f"{legacy_ddl}\nPRAGMA user_version=1;")
         connection.execute(
-            "INSERT INTO runs (run_id,status,started_at_ms,completed_at_ms,strategy_name,"
+            "INSERT INTO runs (rowid,run_id,status,started_at_ms,completed_at_ms,strategy_name,"
             "strategy_version,strategy_config_hash,provider_id,market_type,market_config_hash,"
             "git_commit,data_start_open_ms,data_end_close_ms,data_hash,error) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
+                51,
                 "early-run",
                 "SUCCEEDED",
                 1,
@@ -263,14 +435,75 @@ def test_sqlite_v1_to_v2_migration_accepts_v1_before_notification_outcome_column
                 None,
             ),
         )
+        connection.execute(
+            "INSERT INTO observations (rowid,run_id,instrument_id,signal_id,status,event_time_ms,"
+            "known_time_ms,reason,payload_json) VALUES (?,?,?,?,?,?,?,?,?)",
+            (52, "early-run", "BTC-USDT-PERP", "signal.one", "PASS", 1, 1, "legacy", "{}"),
+        )
+        connection.execute(
+            "INSERT INTO decisions "
+            "(rowid,run_id,instrument_id,decision_status,direction,entry_text,"
+            "stop_text,target_text,first_failed_signal,payload_json) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (
+                53,
+                "early-run",
+                "BTC-USDT-PERP",
+                "NO_TRADE",
+                None,
+                None,
+                None,
+                None,
+                "signal.one",
+                "{}",
+            ),
+        )
 
     repository = SQLiteRepository(path)
+    SQLiteRepository(path)
 
     migrated = repository.load_run("early-run")
     assert migrated is not None
     assert migrated.git_commit == "c" * 40
     assert migrated.code_hash is None
     assert repository.load_notification_outcomes("early-run") == ()
+
+    with sqlite3.connect(path) as connection:
+        retained = connection.execute(
+            "SELECT rowid,git_commit,code_hash,notification_dedup_json,"
+            "notification_outcomes_json,scheduler_outcome FROM runs"
+        ).fetchone()
+        observations = connection.execute("SELECT rowid,* FROM observations").fetchall()
+        decisions = connection.execute("SELECT rowid,* FROM decisions").fetchall()
+        indexes = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='index' AND sql IS NOT NULL"
+            )
+        }
+        version = connection.execute("PRAGMA user_version").fetchone()
+        foreign_keys = connection.execute("PRAGMA foreign_key_check").fetchall()
+        observation_fks = connection.execute("PRAGMA foreign_key_list(observations)").fetchall()
+        decision_fks = connection.execute("PRAGMA foreign_key_list(decisions)").fetchall()
+    assert retained == (51, "c" * 40, None, "[]", "[]", None)
+    assert observations == [
+        (52, "early-run", "BTC-USDT-PERP", "signal.one", "PASS", 1, 1, "legacy", "{}")
+    ]
+    assert decisions == [
+        (53, "early-run", "BTC-USDT-PERP", "NO_TRADE", None, None, None, None, "signal.one", "{}")
+    ]
+    assert indexes == {
+        "idx_candles_1m_active_range",
+        "idx_runs_strategy_completed",
+        "idx_observations_signal_event",
+    }
+    assert version == (2,)
+    assert foreign_keys == []
+    assert [tuple(row[2:7]) for row in observation_fks] == [
+        ("runs", "run_id", "run_id", "NO ACTION", "CASCADE")
+    ]
+    assert [tuple(row[2:7]) for row in decision_fks] == [
+        ("runs", "run_id", "run_id", "NO ACTION", "CASCADE")
+    ]
 
 
 def test_sqlite_run_observation_and_decision_batches_are_idempotent_and_atomic(
@@ -389,18 +622,79 @@ def test_sqlite_requires_exactly_one_valid_run_provenance(tmp_path: Path) -> Non
             repository.store_run(run)
 
 
-def test_sqlite_rejects_version_two_schema_without_canonical_provenance_constraint(
+@pytest.mark.parametrize(
+    ("defect", "old", "new"),
+    (
+        (
+            "missing-foreign-key",
+            "    FOREIGN KEY (run_id) REFERENCES runs(run_id) ON DELETE CASCADE,\n",
+            "",
+        ),
+        (
+            "missing-index",
+            "CREATE INDEX idx_observations_signal_event ON observations(signal_id, event_time_ms);",
+            "",
+        ),
+        (
+            "changed-index",
+            "ON observations(signal_id, event_time_ms);",
+            "ON observations(event_time_ms, signal_id);",
+        ),
+        (
+            "changed-check",
+            "length(code_hash)=64",
+            "length(code_hash)=63",
+        ),
+        ("missing-strict", ") STRICT;", ");"),
+        (
+            "unexpected-column",
+            "    provider_symbol TEXT NOT NULL,\n",
+            "    provider_symbol TEXT NOT NULL,\n    unexpected TEXT,\n",
+        ),
+        (
+            "changed-type",
+            "    provider_symbol TEXT NOT NULL,\n",
+            "    provider_symbol BLOB NOT NULL,\n",
+        ),
+        (
+            "changed-nullability",
+            "    quote_volume TEXT,\n",
+            "    quote_volume TEXT NOT NULL,\n",
+        ),
+        (
+            "changed-default",
+            "    notification_dedup_json TEXT NOT NULL DEFAULT '[]',\n",
+            "    notification_dedup_json TEXT NOT NULL DEFAULT '[1]',\n",
+        ),
+        (
+            "changed-primary-key",
+            "    run_id TEXT PRIMARY KEY,\n",
+            "    run_id TEXT UNIQUE,\n",
+        ),
+    ),
+)
+def test_sqlite_rejects_malformed_v2_shapes_before_mutation(
     tmp_path: Path,
+    defect: str,
+    old: str,
+    new: str,
 ) -> None:
-    from trading_research.adapters.persistence.sqlite import DDL, SQLiteRepository
+    from trading_research.adapters.persistence.sqlite import DDL, SQLiteSnapshotReader
 
-    path = tmp_path / "malformed-v2.db"
-    malformed = DDL.replace("length(code_hash)=64", "length(code_hash)=63")
+    path = tmp_path / f"{defect}-v2.db"
+    malformed = DDL.replace(old, new, 1)
+    assert malformed != DDL
     with sqlite3.connect(path) as connection:
         connection.executescript(f"{malformed}\nPRAGMA user_version=2;")
 
-    with pytest.raises(RuntimeError, match="unsupported or malformed SQLite schema"):
-        SQLiteRepository(path)
+    _assert_repository_rejection_preserves_database(path)
+
+    before_bytes = path.read_bytes()
+    before_state = _readonly_database_state(path)
+    with pytest.raises(RuntimeError, match="unsupported or malformed SQLite snapshot"):
+        SQLiteSnapshotReader(path)
+    assert path.read_bytes() == before_bytes
+    assert _readonly_database_state(path) == before_state
 
 
 def test_sqlite_canonicalizes_nested_immutable_payload_mappings(tmp_path: Path) -> None:

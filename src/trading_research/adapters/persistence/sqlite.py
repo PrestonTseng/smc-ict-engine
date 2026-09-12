@@ -8,6 +8,7 @@ import sqlite3
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from functools import lru_cache
 from hashlib import sha256
 from pathlib import Path
 from typing import cast
@@ -174,6 +175,18 @@ CREATE TABLE decisions (
 ) STRICT;
 """
 
+_EARLY_V1_DDL = (
+    V1_DDL.replace("    notification_outcomes_json TEXT NOT NULL DEFAULT '[]',\n", "")
+    .replace("    scheduler_outcome TEXT,\n", "")
+    .replace("    CHECK (json_valid(notification_outcomes_json)),\n", "")
+    .replace(
+        "    CHECK (scheduler_outcome IS NULL OR scheduler_outcome IN\n"
+        "        ('SUCCEEDED','SUCCEEDED_WITH_WARNINGS','FAILED','OVERLAP_SKIPPED',\n"
+        "         'MAXIMUM_RUNTIME','SCHEDULER_SHUTDOWN','PROCESS_RESTART')),\n",
+        "",
+    )
+)
+
 DDL = V1_DDL.replace(
     "    git_commit TEXT NOT NULL,\n",
     "    git_commit TEXT,\n    code_hash TEXT,\n",
@@ -188,11 +201,9 @@ _RUNS_V2_DDL = (
     "CREATE TABLE runs_v2 ("
     + DDL.split("CREATE TABLE runs (", 1)[1].split("CREATE INDEX idx_runs_strategy_completed", 1)[0]
 )
-_RUNS_DDL = "CREATE TABLE runs ( " + DDL.split("CREATE TABLE runs (", 1)[1].split(
-    "CREATE INDEX idx_runs_strategy_completed", 1
-)[0].strip().removesuffix(";")
 
 _TABLES = {"candles_1m", "sync_state", "runs", "observations", "decisions"}
+_TABLE_ORDER = ("candles_1m", "sync_state", "runs", "observations", "decisions")
 _CANDLE_COLUMNS = (
     "provider_id",
     "market_type",
@@ -229,6 +240,118 @@ _RUN_COLUMNS = (
 )
 
 
+@dataclass(frozen=True, slots=True)
+class _SchemaShape:
+    table_properties: tuple[tuple[object, ...], ...]
+    columns: tuple[tuple[str, tuple[tuple[object, ...], ...]], ...]
+    foreign_keys: tuple[tuple[str, tuple[tuple[object, ...], ...]], ...]
+    indexes: tuple[tuple[str, tuple[tuple[object, ...], ...]], ...]
+    index_columns: tuple[tuple[str, tuple[tuple[object, ...], ...]], ...]
+    schema_objects: tuple[tuple[object, ...], ...]
+
+
+def _schema_rows(connection: sqlite3.Connection, query: str) -> tuple[tuple[object, ...], ...]:
+    return tuple(tuple(row) for row in connection.execute(query).fetchall())
+
+
+def _quote_identifier(identifier: str) -> str:
+    return '"' + identifier.replace('"', '""') + '"'
+
+
+def _normalize_schema_sql(sql: str) -> str:
+    return " ".join(sql.replace('"runs"', "runs").split())
+
+
+def _schema_shape(connection: sqlite3.Connection) -> _SchemaShape:
+    table_properties = tuple(
+        sorted(
+            tuple(row[1:])
+            for row in connection.execute("PRAGMA table_list").fetchall()
+            if row[0] == "main" and row[1] in _TABLES
+        )
+    )
+    columns = tuple(
+        (table, _schema_rows(connection, f"PRAGMA table_xinfo({_quote_identifier(table)})"))
+        for table in _TABLE_ORDER
+    )
+    foreign_keys = tuple(
+        (table, _schema_rows(connection, f"PRAGMA foreign_key_list({_quote_identifier(table)})"))
+        for table in _TABLE_ORDER
+    )
+    index_rows = {
+        table: tuple(
+            sorted(
+                (row[1], row[2], row[3], row[4])
+                for row in connection.execute(
+                    f"PRAGMA index_list({_quote_identifier(table)})"
+                ).fetchall()
+            )
+        )
+        for table in _TABLE_ORDER
+    }
+    indexes = tuple((table, index_rows[table]) for table in _TABLE_ORDER)
+    index_columns = tuple(
+        (
+            cast(str, index[0]),
+            _schema_rows(
+                connection,
+                f"PRAGMA index_xinfo({_quote_identifier(cast(str, index[0]))})",
+            ),
+        )
+        for table in _TABLE_ORDER
+        for index in index_rows[table]
+    )
+    schema_objects = tuple(
+        (row[0], row[1], row[2], _normalize_schema_sql(cast(str, row[3])))
+        for row in connection.execute(
+            "SELECT type,name,tbl_name,sql FROM sqlite_master "
+            "WHERE sql IS NOT NULL ORDER BY type,name"
+        ).fetchall()
+    )
+    return _SchemaShape(
+        table_properties,
+        columns,
+        foreign_keys,
+        indexes,
+        index_columns,
+        schema_objects,
+    )
+
+
+@lru_cache(maxsize=3)
+def _canonical_schema_shape(ddl: str) -> _SchemaShape:
+    with sqlite3.connect(":memory:") as connection:
+        connection.executescript(ddl)
+        return _schema_shape(connection)
+
+
+def _assert_accepted_schema(
+    connection: sqlite3.Connection,
+    version: int,
+    *,
+    message: str = "unsupported or malformed SQLite schema",
+) -> None:
+    accepted = {
+        1: (_canonical_schema_shape(V1_DDL), _canonical_schema_shape(_EARLY_V1_DDL)),
+        2: (_canonical_schema_shape(DDL),),
+    }
+    if version not in accepted or _schema_shape(connection) not in accepted[version]:
+        raise RuntimeError(message)
+    if connection.execute("PRAGMA foreign_key_check").fetchall():
+        raise RuntimeError(message)
+    if connection.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+        raise RuntimeError(message)
+
+
+def _open_read_only(path: Path) -> sqlite3.Connection:
+    uri = f"{path.resolve().as_uri()}?mode=ro"
+    connection = sqlite3.connect(uri, uri=True, isolation_level=None)
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA query_only=ON")
+    connection.execute("PRAGMA trusted_schema=OFF")
+    return connection
+
+
 class SourceConflictError(RuntimeError):
     """A durable primary key already names different market truth."""
 
@@ -251,22 +374,14 @@ class SQLiteSnapshotReader:
         self.path = Path(path)
         with self._connect() as connection:
             version = cast(int, connection.execute("PRAGMA user_version").fetchone()[0])
-            tables = {
-                row[0]
-                for row in connection.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
-                )
-            }
-        if version not in {1, 2} or tables != _TABLES:
-            raise RuntimeError("unsupported or malformed SQLite snapshot")
+            _assert_accepted_schema(
+                connection,
+                version,
+                message="unsupported or malformed SQLite snapshot",
+            )
 
     def _connect(self) -> sqlite3.Connection:
-        uri = f"{self.path.resolve().as_uri()}?mode=ro&immutable=1"
-        connection = sqlite3.connect(uri, uri=True, isolation_level=None)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA query_only=ON")
-        connection.execute("PRAGMA trusted_schema=OFF")
-        return connection
+        return _open_read_only(self.path)
 
     def load_candles(
         self,
@@ -335,7 +450,6 @@ class SQLiteRepository:
 
     def __init__(self, path: str | Path = "./data/trading_research.db") -> None:
         self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
 
     def _connect(self) -> sqlite3.Connection:
@@ -349,38 +463,37 @@ class SQLiteRepository:
         return connection
 
     def _initialize(self) -> None:
-        with self._connect() as connection:
-            version = cast(int, connection.execute("PRAGMA user_version").fetchone()[0])
-            tables = {
-                row[0]
-                for row in connection.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+        if self.path.exists():
+            with _open_read_only(self.path) as connection:
+                version = cast(int, connection.execute("PRAGMA user_version").fetchone()[0])
+                tables = {
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+                    )
+                }
+                object_count = cast(
+                    int,
+                    connection.execute("SELECT count(*) FROM sqlite_master").fetchone()[0],
                 )
-            }
+                if version == 0 and not tables and object_count == 0:
+                    pass
+                else:
+                    _assert_accepted_schema(connection, version)
+        else:
+            version = 0
+            tables = set()
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+
+        with self._connect() as connection:
             if version == 0 and not tables:
                 connection.executescript(f"{DDL}\nPRAGMA user_version=2;")
+                _assert_accepted_schema(connection, 2)
                 return
-            if version not in {1, 2} or tables != _TABLES:
-                raise RuntimeError("unsupported or malformed SQLite schema")
             if version == 1:
                 self._migrate_v1_to_v2(connection)
                 return
-            run_columns = {
-                row[1] for row in connection.execute("PRAGMA table_info(runs)").fetchall()
-            }
-            if "code_hash" not in run_columns:
-                raise RuntimeError("unsupported or malformed SQLite schema")
-            runs_sql = cast(
-                str,
-                connection.execute(
-                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='runs'"
-                ).fetchone()[0],
-            )
-            canonical_runs_sql = " ".join(runs_sql.split()).replace(
-                'CREATE TABLE "runs"', "CREATE TABLE runs", 1
-            )
-            if canonical_runs_sql != " ".join(_RUNS_DDL.split()):
-                raise RuntimeError("unsupported or malformed SQLite schema")
+            _assert_accepted_schema(connection, 2)
 
     @staticmethod
     def _migrate_v1_to_v2(connection: sqlite3.Connection) -> None:
@@ -419,10 +532,7 @@ class SQLiteRepository:
                 "ON runs(strategy_name, strategy_version, completed_at_ms DESC)"
             )
             connection.execute("PRAGMA user_version=2")
-            if connection.execute("PRAGMA foreign_key_check").fetchall():
-                raise RuntimeError("SQLite migration violated foreign keys")
-            if connection.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
-                raise RuntimeError("SQLite migration failed integrity check")
+            _assert_accepted_schema(connection, 2)
             connection.commit()
         except Exception:
             connection.rollback()
