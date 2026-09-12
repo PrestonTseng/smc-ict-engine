@@ -27,6 +27,7 @@ _LIFECYCLE_STATUS = {
     "run_succeeded": "SUCCEEDED",
     "run_failed": "FAILED",
 }
+_MAX_VISIBLE_TEXT_CHARACTERS = 5_500
 
 
 def _truncate(value: object, maximum: int) -> str:
@@ -59,6 +60,18 @@ def _exact_decision_value(value: object) -> str:
     if len(value) > 64:
         raise ValueError("exact decision value exceeds 64 characters")
     return value
+
+
+def _visible_text_character_count(value: object) -> int:
+    """Count rendered text values without counting JSON keys or structure."""
+
+    if isinstance(value, str):
+        return len(value)
+    if isinstance(value, Mapping):
+        return sum(_visible_text_character_count(nested) for nested in value.values())
+    if isinstance(value, list | tuple):
+        return sum(_visible_text_character_count(nested) for nested in value)
+    return 0
 
 
 def _lifecycle_embed(event: NotificationEvent) -> dict[str, object]:
@@ -279,6 +292,11 @@ def format_discord_payload(
     }
     if part_number is not None:
         payload["content"] = f"Evaluation results · Part {part_number}"
+    visible_text_characters = _visible_text_character_count(
+        {key: payload[key] for key in ("content", "embeds") if key in payload}
+    )
+    if visible_text_characters > _MAX_VISIBLE_TEXT_CHARACTERS:
+        raise ValueError("Discord visible text exceeds 5,500 characters")
     return payload
 
 

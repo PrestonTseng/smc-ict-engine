@@ -27,8 +27,11 @@ class NotificationEvent:
             InstrumentId(self.instrument_id)
         if type(self.strategy_id) is not str or not self.strategy_id:
             raise ValueError("strategy ID is required")
-        if type(self.payload_schema_version) is not int or self.payload_schema_version < 1:
-            raise ValueError("payload schema version must be a positive integer")
+        if (
+            type(self.payload_schema_version) is not int
+            or not 1 <= self.payload_schema_version <= 2_147_483_647
+        ):
+            raise ValueError("payload schema version must be an integer in 1..2147483647")
         object.__setattr__(self, "payload", MappingProxyType(dict(self.payload)))
 
 

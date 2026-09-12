@@ -634,3 +634,97 @@ def test_loaded_discord_config_routes_only_formatter_compatible_batches() -> Non
         "Evaluation results · Part 1",
         "Evaluation results · Part 2",
     ]
+
+
+@pytest.mark.parametrize(
+    "payload_schema_version",
+    [True, 0, 2_147_483_648, "1", 10**1_000],
+)
+def test_notification_event_rejects_noncanonical_or_unbounded_schema_version(
+    payload_schema_version: object,
+) -> None:
+    with pytest.raises(ValueError, match="payload schema version"):
+        NotificationEvent(
+            "run_started",
+            "run-1",
+            None,
+            "strategy",
+            payload_schema_version,  # type: ignore[arg-type]
+            {},
+        )
+
+
+@pytest.mark.parametrize("payload_schema_version", [1, 2_147_483_647])
+def test_notification_event_accepts_schema_version_contract_boundaries(
+    payload_schema_version: int,
+) -> None:
+    event = NotificationEvent("run_started", "run-1", None, "strategy", payload_schema_version, {})
+
+    assert event.payload_schema_version == payload_schema_version
+
+
+def test_eight_minimal_lifecycle_events_that_previously_rendered_8880_characters_are_rejected() -> (
+    None
+):
+    # Eight two-character strategies and 1,000-digit footer versions previously rendered
+    # 8,880 characters.
+    with pytest.raises(ValueError, match="payload schema version"):
+        tuple(
+            NotificationEvent(
+                "run_started",
+                f"run-{index}",
+                None,
+                "st",
+                10**999,
+                {},
+            )
+            for index in range(8)
+        )
+
+
+@pytest.mark.parametrize(("visible_characters", "accepted"), [(5_500, True), (5_501, False)])
+def test_discord_formatter_enforces_aggregate_visible_text_boundary(
+    monkeypatch: pytest.MonkeyPatch, visible_characters: int, accepted: bool
+) -> None:
+    import trading_research.adapters.notifications.discord_webhook as discord
+
+    event = NotificationEvent("run_started", "run-1", None, "strategy", 1, {})
+    content = "Evaluation results · Part 1"
+    per_embed, remainder = divmod(visible_characters - len(content), 8)
+    embeds = iter(
+        {"title": "x" * (per_embed + (1 if index < remainder else 0))} for index in range(8)
+    )
+    monkeypatch.setattr(discord, "_embed", lambda _event: next(embeds))
+
+    if accepted:
+        payload = discord.format_discord_payload((event,) * 8, part_number=1)
+        assert discord._visible_text_character_count(payload) == 5_500
+    else:
+        with pytest.raises(ValueError, match="5,500"):
+            discord.format_discord_payload((event,) * 8, part_number=1)
+
+
+def test_discord_adapter_rejects_aggregate_overflow_before_opener(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import trading_research.adapters.notifications.discord_webhook as discord
+
+    opened = False
+
+    def opener(*_args: object, **_kwargs: object) -> object:
+        nonlocal opened
+        opened = True
+        raise AssertionError("aggregate overflow must not reach transport")
+
+    monkeypatch.setattr(discord, "_embed", lambda _event: {"title": "x" * 5_501})
+    adapter = discord.DiscordWebhookNotifier(
+        "discord_debug",
+        _destination(),
+        environ={"DISCORD_HOOK": "https://discord.invalid/api/webhooks/id/token"},
+        opener=opener,
+    )
+
+    with pytest.raises(ValueError, match="5,500"):
+        adapter.deliver(NotificationEvent("run_started", "run-1", None, "strategy", 1, {}))
+
+    assert opened is False
