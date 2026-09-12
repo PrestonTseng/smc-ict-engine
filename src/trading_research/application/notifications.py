@@ -158,9 +158,8 @@ class NotificationRouter:
             if len(eligible) == 1 or not callable(deliver_batch):
                 for event in eligible:
                     receipt = adapter.deliver(event)
-                    if receipt.outcome == "SUCCESS" and (
-                        not self._record_outcome(receipt, event.run_id, now)
-                        or not self._record_successes(destination_id, destination, (event,), now)
+                    if receipt.outcome == "SUCCESS" and not self._record_success(
+                        receipt, destination_id, destination, (event,), now
                     ):
                         receipt = self._deduplication_state_failure(
                             destination_id, destination, event
@@ -173,9 +172,8 @@ class NotificationRouter:
             receipt = deliver_batch(tuple(eligible))
             if not isinstance(receipt, DeliveryReceipt):
                 raise RuntimeError("notification adapter returned an invalid batch receipt")
-            if receipt.outcome == "SUCCESS" and (
-                not self._record_outcome(receipt, eligible[0].run_id, now)
-                or not self._record_successes(destination_id, destination, tuple(eligible), now)
+            if receipt.outcome == "SUCCESS" and not self._record_success(
+                receipt, destination_id, destination, tuple(eligible), now
             ):
                 receipt = self._deduplication_state_failure(
                     destination_id, destination, eligible[0]
@@ -243,9 +241,7 @@ class NotificationRouter:
             self._record_outcome(receipt, event.run_id, now)
             return receipt
         if receipt.outcome == "SUCCESS":
-            if not self._record_outcome(receipt, event.run_id, now) or not self._record_successes(
-                destination_id, destination, (event,), now
-            ):
+            if not self._record_success(receipt, destination_id, destination, (event,), now):
                 receipt = self._deduplication_state_failure(destination_id, destination, event)
                 self._log_outcome(receipt, now)
         else:
@@ -298,13 +294,24 @@ class NotificationRouter:
             )
         return self._deduplicated_at.get((destination_id, deduplication_id))
 
-    def _record_successes(
+    def _record_success(
         self,
+        receipt: DeliveryReceipt,
         destination_id: str,
         destination: NotificationDestination,
         events: tuple[NotificationEvent, ...],
         delivered_at: int,
     ) -> bool:
+        outcome = NotificationDeliveryRecord(
+            events[0].run_id,
+            receipt.destination_id,
+            receipt.adapter_id,
+            delivered_at,
+            receipt.attempts,
+            receipt.outcome,
+            receipt.reason_code,
+            receipt.status_code,
+        )
         records = tuple(
             NotificationDedupRecord(
                 event.run_id,
@@ -316,7 +323,7 @@ class NotificationRouter:
         )
         try:
             if self._deduplication_store is not None:
-                self._deduplication_store.store_notification_deliveries(records)
+                self._deduplication_store.store_successful_notification_delivery(outcome, records)
             else:
                 for record in records:
                     self._deduplicated_at[(record.destination_id, record.deduplication_id)] = (
@@ -324,6 +331,7 @@ class NotificationRouter:
                     )
         except Exception:
             return False
+        self._log_outcome(receipt, delivered_at)
         return True
 
     def _deduplicated_receipt(

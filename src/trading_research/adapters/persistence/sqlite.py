@@ -768,11 +768,7 @@ class SQLiteRepository:
         if not records:
             return
         for record in records:
-            if type(record.run_id) is not str or not record.run_id:
-                raise ValueError("invalid notification run identity")
-            self._validate_notification_identity(record.destination_id, record.deduplication_id)
-            if type(record.delivered_at_seconds) is not int or record.delivered_at_seconds < 0:
-                raise ValueError("invalid notification delivery time")
+            self._validate_notification_dedup_record(record)
 
         connection = self._connect()
         try:
@@ -807,6 +803,73 @@ class SQLiteRepository:
                     "UPDATE runs SET notification_dedup_json=? WHERE run_id=?",
                     (self._canonical_json(retained), run_id),
                 )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def store_successful_notification_delivery(
+        self,
+        outcome: NotificationDeliveryRecord,
+        dedup_records: tuple[NotificationDedupRecord, ...],
+    ) -> None:
+        self._validate_notification_outcome(outcome)
+        if outcome.outcome != "SUCCESS" or not dedup_records:
+            raise ValueError("successful notification delivery evidence is required")
+        for record in dedup_records:
+            self._validate_notification_dedup_record(record)
+            if (
+                record.run_id != outcome.run_id
+                or record.destination_id != outcome.destination_id
+                or record.delivered_at_seconds != outcome.attempted_at_seconds
+            ):
+                raise ValueError("notification delivery evidence does not match outcome")
+
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT notification_outcomes_json,notification_dedup_json "
+                "FROM runs WHERE run_id=?",
+                (outcome.run_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError("unknown notification run identity")
+            outcomes = self._notification_outcome_records(
+                row["notification_outcomes_json"], outcome.run_id
+            )
+            outcomes.append(outcome)
+            current_dedup = self._notification_records(row["notification_dedup_json"])
+            identities = {
+                (record.destination_id, record.deduplication_id) for record in dedup_records
+            }
+            retained_dedup = [
+                record
+                for record in current_dedup
+                if (record["destination_id"], record["deduplication_id"]) not in identities
+            ]
+            retained_dedup.extend(
+                {
+                    "destination_id": record.destination_id,
+                    "deduplication_id": record.deduplication_id,
+                    "delivered_at_seconds": record.delivered_at_seconds,
+                }
+                for record in dedup_records
+            )
+            encoded_outcomes = self._canonical_json(
+                [self._notification_outcome_payload(record) for record in outcomes[-100:]]
+            )
+            encoded_dedup = self._canonical_json(retained_dedup)
+            connection.execute(
+                "UPDATE runs SET notification_outcomes_json=? WHERE run_id=?",
+                (encoded_outcomes, outcome.run_id),
+            )
+            connection.execute(
+                "UPDATE runs SET notification_dedup_json=? WHERE run_id=?",
+                (encoded_dedup, outcome.run_id),
+            )
             connection.commit()
         except Exception:
             connection.rollback()
@@ -947,6 +1010,14 @@ class SQLiteRepository:
             valid = False
         if not valid:
             raise ValueError("invalid notification outcome")
+
+    @classmethod
+    def _validate_notification_dedup_record(cls, record: NotificationDedupRecord) -> None:
+        if type(record.run_id) is not str or not record.run_id:
+            raise ValueError("invalid notification run identity")
+        cls._validate_notification_identity(record.destination_id, record.deduplication_id)
+        if type(record.delivered_at_seconds) is not int or record.delivered_at_seconds < 0:
+            raise ValueError("invalid notification delivery time")
 
     @staticmethod
     def _validate_notification_identity(destination_id: object, deduplication_id: object) -> None:

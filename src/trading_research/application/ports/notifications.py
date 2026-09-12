@@ -83,6 +83,12 @@ class NotificationDeduplicationStore(Protocol):
         self, records: tuple[NotificationDeliveryRecord, ...]
     ) -> None: ...
 
+    def store_successful_notification_delivery(
+        self,
+        outcome: NotificationDeliveryRecord,
+        dedup_records: tuple[NotificationDedupRecord, ...],
+    ) -> None: ...
+
 
 @runtime_checkable
 class Notifier(Protocol):
