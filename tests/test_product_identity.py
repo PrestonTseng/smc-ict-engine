@@ -33,3 +33,13 @@ def test_product_identity_is_trading_research_engine_0_2_0() -> None:
     assert 'ENTRYPOINT ["trading-research"]' in dockerfile
     assert readme.startswith("# Trading Research Engine\n")
     assert "trading_research.db" in readme
+
+
+def test_release_owner_actions_are_explicitly_separate_from_local_candidate() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    prose = " ".join(readme.split())
+
+    assert "GitHub repository rename" in prose
+    assert "production database cutover" in prose
+    assert "production deployment" in prose
+    assert "separate owner-authorized actions" in prose

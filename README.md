@@ -4,6 +4,10 @@ Trading Research Engine is a command-line research engine for deterministic eval
 
 The engine stores research receipts in SQLite. It has no web service, order path, broker credentials, or live-trading feature.
 
+This repository describes a local candidate only. The GitHub repository rename, production database
+cutover, and production deployment are separate owner-authorized actions; none is performed by the
+build, migration tests, or verification commands in this repository.
+
 ## Architecture
 
 The package has these boundaries:
