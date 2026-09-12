@@ -108,15 +108,162 @@ def test_code_hash_fails_closed_if_selected_source_becomes_a_symlink(
     module.write_text("VALUE = 1\n", encoding="utf-8")
     outside = tmp_path / "outside.py"
     outside.write_text("VALUE = 2\n", encoding="utf-8")
-    original_members = provenance._python_members
+    original_reader = provenance._read_regular_file
+    replaced = False
 
-    def replace_after_selection(package_root: Path) -> tuple[Path, ...]:
-        members = original_members(package_root)
-        module.unlink()
-        module.symlink_to(outside)
-        return members
+    def replace_after_selection(
+        directory_descriptor: int, name: str, path_status: os.stat_result
+    ) -> tuple[tuple[int, int], bytes]:
+        nonlocal replaced
+        if name == "module.py" and not replaced:
+            module.unlink()
+            module.symlink_to(outside)
+            replaced = True
+        return original_reader(directory_descriptor, name, path_status)
 
-    monkeypatch.setattr(provenance, "_python_members", replace_after_selection)
+    monkeypatch.setattr(provenance, "_read_regular_file", replace_after_selection)
+
+    with pytest.raises(OSError):
+        provenance.calculate_code_hash(root)
+
+
+def test_code_hash_fails_closed_if_source_is_added_after_initial_enumeration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from trading_research import provenance
+
+    root = tmp_path / "trading_research"
+    root.mkdir()
+    (root / "__init__.py").write_text("", encoding="utf-8")
+    original_listdir = provenance.os.listdir
+    added = False
+
+    def add_after_initial_enumeration(directory_descriptor: int) -> list[str]:
+        nonlocal added
+        names = original_listdir(directory_descriptor)
+        if not added:
+            (root / "added.py").write_text("ADDED = True\n", encoding="utf-8")
+            added = True
+        return names
+
+    monkeypatch.setattr(provenance.os, "listdir", add_after_initial_enumeration)
+
+    with pytest.raises(OSError, match="changed while calculating code hash"):
+        provenance.calculate_code_hash(root)
+
+
+@pytest.mark.parametrize("mutation", ["remove", "rename", "replace", "symlink", "content"])
+def test_code_hash_fails_closed_for_source_interleavings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
+) -> None:
+    from trading_research import provenance
+
+    root = tmp_path / "trading_research"
+    root.mkdir()
+    (root / "__init__.py").write_text("", encoding="utf-8")
+    module = root / "module.py"
+    module.write_text("VALUE = 1\n", encoding="utf-8")
+    outside = tmp_path / "outside.py"
+    outside.write_text("VALUE = 1\n", encoding="utf-8")
+    original_snapshot = provenance._snapshot_python_sources
+    mutated = False
+
+    def mutate_after_initial_snapshot(
+        package_root: Path,
+    ) -> tuple[provenance._SourceSnapshotMember, ...]:
+        nonlocal mutated
+        snapshot = original_snapshot(package_root)
+        if not mutated:
+            if mutation == "remove":
+                module.unlink()
+            elif mutation == "rename":
+                module.rename(root / "renamed.py")
+            elif mutation == "replace":
+                replacement = root / "replacement"
+                replacement.write_bytes(module.read_bytes())
+                replacement.replace(module)
+            elif mutation == "symlink":
+                module.unlink()
+                module.symlink_to(outside)
+            else:
+                module.write_text("VALUE = 2\n", encoding="utf-8")
+            mutated = True
+        return snapshot
+
+    monkeypatch.setattr(provenance, "_snapshot_python_sources", mutate_after_initial_snapshot)
+
+    with pytest.raises((ValueError, OSError)):
+        provenance.calculate_code_hash(root)
+
+
+@pytest.mark.parametrize(
+    "mutation", ["metadata", "non-source", "non-source-directory", "non-source-symlink"]
+)
+def test_code_hash_accepts_non_source_interleavings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
+) -> None:
+    from trading_research import provenance
+
+    root = tmp_path / "trading_research"
+    root.mkdir()
+    (root / "__init__.py").write_text("", encoding="utf-8")
+    module = root / "module.py"
+    module.write_text("VALUE = 1\n", encoding="utf-8")
+    original_snapshot = provenance._snapshot_python_sources
+    mutated = False
+
+    def mutate_after_initial_snapshot(
+        package_root: Path,
+    ) -> tuple[provenance._SourceSnapshotMember, ...]:
+        nonlocal mutated
+        snapshot = original_snapshot(package_root)
+        if not mutated:
+            if mutation == "metadata":
+                os.chmod(module, 0o600)
+                os.utime(module, (1, 1))
+            elif mutation == "non-source-symlink":
+                outside = tmp_path / "outside.txt"
+                outside.write_text("ignored", encoding="utf-8")
+                (root / "notes.txt").symlink_to(outside)
+            elif mutation == "non-source-directory":
+                assets = root / "assets"
+                assets.mkdir()
+                (assets / "fixture.txt").write_text("ignored", encoding="utf-8")
+            else:
+                (root / "notes.txt").write_text("ignored", encoding="utf-8")
+            mutated = True
+        return snapshot
+
+    monkeypatch.setattr(provenance, "_snapshot_python_sources", mutate_after_initial_snapshot)
+
+    assert provenance.calculate_code_hash(root) == _expected_code_hash(root)
+
+
+def test_code_hash_fails_closed_if_package_root_becomes_a_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from trading_research import provenance
+
+    root = tmp_path / "trading_research"
+    root.mkdir()
+    (root / "__init__.py").write_text("", encoding="utf-8")
+    (root / "module.py").write_text("VALUE = 1\n", encoding="utf-8")
+    original_snapshot = provenance._snapshot_python_sources
+    replaced = False
+
+    def replace_root_after_initial_snapshot(
+        package_root: Path,
+    ) -> tuple[provenance._SourceSnapshotMember, ...]:
+        nonlocal replaced
+        snapshot = original_snapshot(package_root)
+        if not replaced:
+            moved_root = tmp_path / "moved-package"
+            root.rename(moved_root)
+            root.symlink_to(moved_root, target_is_directory=True)
+            replaced = True
+        return snapshot
+
+    monkeypatch.setattr(provenance, "_snapshot_python_sources", replace_root_after_initial_snapshot)
 
     with pytest.raises(OSError):
         provenance.calculate_code_hash(root)
