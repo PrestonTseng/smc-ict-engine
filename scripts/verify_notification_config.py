@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from trading_research.adapters.notifications import DiscordWebhookNotifier
@@ -10,12 +11,27 @@ from trading_research.configuration.models import NotificationDestination, Secre
 
 ROOT = Path(__file__).parents[1]
 EXAMPLE = ROOT / "config" / "notifications.yaml"
+ENABLED_EVENTS_FIELD = re.compile(
+    r"^(?P<indent>[ \t]*)enabled_events:[ \t]*\[[^\r\n]*\](?P<newline>\r?\n|$)",
+    re.MULTILINE,
+)
 
 
 def replace_once(text: str, old: str, new: str) -> str:
     if text.count(old) < 1:
         raise AssertionError(f"fixture fragment not found: {old!r}")
     return text.replace(old, new, 1)
+
+
+def replace_enabled_events(text: str, events: tuple[str, ...]) -> str:
+    def replacement(match: re.Match[str]) -> str:
+        selected = ", ".join(events)
+        return f"{match['indent']}enabled_events: [{selected}]{match['newline']}"
+
+    updated, replacements = ENABLED_EVENTS_FIELD.subn(replacement, text)
+    if replacements != 1:
+        raise AssertionError(f"expected one enabled_events field, found {replacements}")
+    return updated
 
 
 def must_reject_loader(text: str) -> None:
@@ -55,16 +71,8 @@ def main() -> None:
             "      adapter: discord_webhook\n      extra: 1\n",
         ),
         replace_once(source, "adapter: discord_webhook", "adapter: unknown"),
-        replace_once(
-            source,
-            "enabled_events: [run_started, run_succeeded, run_failed, decision_found, no_decision]",
-            "enabled_events: [decision_found, decision_found]",
-        ),
-        replace_once(
-            source,
-            "enabled_events: [run_started, run_succeeded, run_failed, decision_found, no_decision]",
-            "enabled_events: []",
-        ),
+        replace_enabled_events(source, ("decision_found", "decision_found")),
+        replace_enabled_events(source, ()),
         replace_once(
             source,
             "endpoint:\n        file: /run/secrets/discord_webhook_url",
@@ -81,11 +89,7 @@ def main() -> None:
         replace_once(source, "window_seconds: 300", "window_seconds: true"),
         replace_once(source, "window_seconds: 300", 'window_seconds: "300"'),
         "notifications: {enabled: true, destinations: {}}\n",
-        replace_once(
-            source,
-            "enabled_events: [run_started, run_succeeded, run_failed, decision_found, no_decision]",
-            "enabled_events: [unknown_event]",
-        ),
+        replace_enabled_events(source, ("unknown_event",)),
         replace_once(
             source,
             "retries:\n        maximum_attempts: 3\n        backoff_seconds: [1, 2]",

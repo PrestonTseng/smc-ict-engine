@@ -79,13 +79,16 @@ loads `/config/market-data.yaml` and uses the database and lock under `/data`.
 
 ## Do a notification dry test
 
+Select an event enabled for at least one destination to receive its adapter preview. A filtered event
+returns no matching destination or preview.
+
 ```sh
 uv run trading-research notifier-test \
   --notifications config/notifications.yaml \
-  --event run_succeeded \
+  --event run_failed \
   --run-id fixture-run \
   --strategy-id source-aligned-research \
-  --payload '{"status":"SUCCEEDED","event_time_ms":1725000000123,"instrument_count":2,"decision_count":0}'
+  --payload '{"status":"FAILED","event_time_ms":1725000000123,"instrument_count":2,"error_category":"fixture_failure"}'
 ```
 
 This command validates the notification configuration, event filters, and scalar payload. When the

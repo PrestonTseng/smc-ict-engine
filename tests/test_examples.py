@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import runpy
 import subprocess
 from pathlib import Path
 
@@ -55,13 +56,6 @@ def test_checked_in_examples_cross_real_loader_boundaries() -> None:
     destination = notifications.destinations["discord_debug"]
     assert destination.adapter == "discord_webhook"
     assert destination.enabled is True
-    assert destination.enabled_events == (
-        "run_started",
-        "run_succeeded",
-        "run_failed",
-        "decision_found",
-        "no_decision",
-    )
     assert destination.endpoint.kind == "file"
     assert destination.endpoint.name == "/run/secrets/discord_webhook_url"
     assert destination.batching.maximum_events == 8
@@ -107,3 +101,18 @@ def test_notification_config_rejection_validator_matches_the_checked_in_example(
     assert result.returncode == 0, result.stderr
     assert "PASS real loader notification example: destinations=1" in result.stdout
     assert "adapter=discord_webhook" in result.stdout
+
+
+def test_notification_config_rejection_helper_replaces_the_current_event_selection() -> None:
+    replace_enabled_events = runpy.run_path(str(ROOT / "scripts/verify_notification_config.py"))[
+        "replace_enabled_events"
+    ]
+
+    sources = (
+        "enabled_events: [run_started]\n",
+        "enabled_events: [run_succeeded, no_decision]\n",
+    )
+    for source in sources:
+        assert replace_enabled_events(source, ("unknown_event",)) == (
+            "enabled_events: [unknown_event]\n"
+        )

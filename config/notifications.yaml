@@ -4,7 +4,7 @@ notifications:
     discord_debug:
       adapter: discord_webhook
       enabled: true
-      enabled_events: [run_started, run_succeeded, run_failed, decision_found, no_decision]
+      enabled_events: [decision_found, run_failed]
       endpoint:
         file: /run/secrets/discord_webhook_url
       timeout_seconds: 5

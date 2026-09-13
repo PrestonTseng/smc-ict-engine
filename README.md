@@ -47,10 +47,11 @@ docker compose build engine
 docker compose up -d engine
 ```
 
-The sample has one `discord_debug` destination for all five event types. It resolves only
-`/run/secrets/discord_webhook_url`, mounted from `./secrets/discord_webhook_url`. Do not commit the
-resolved endpoint, `.env`, `secrets/`, databases, backups, or logs. See `docs/operations.md` for the
-copy-ready rotation, health, database, log, manual-run, and shutdown commands.
+The sample has one `discord_debug` destination for `decision_found` and `run_failed` events. It
+resolves only `/run/secrets/discord_webhook_url`, mounted from `./secrets/discord_webhook_url`. Do not
+commit the resolved endpoint, `.env`, `secrets/`, databases, backups, or logs. See
+`docs/operations.md` for the copy-ready rotation, health, database, log, manual-run, and shutdown
+commands.
 
 Read readiness and logs:
 
@@ -105,15 +106,17 @@ Host commands derive `trading_research.db`, `engine.lock`, and `scheduler.ready`
 `CONFIG_FOLDER`. Both roots must be normalized absolute paths. Operation-level path overrides are
 intentionally rejected.
 
-The notifier dry test validates a bounded event payload without a delivery attempt:
+The notifier dry test validates a bounded event payload without a delivery attempt. Select an event
+enabled for at least one destination to receive its adapter preview; a filtered event returns no
+matching destination or preview.
 
 ```sh
 uv run trading-research notifier-test \
   --notifications config/notifications.yaml \
-  --event run_succeeded \
+  --event run_failed \
   --run-id fixture-run \
   --strategy-id source-aligned-research \
-  --payload '{"status":"SUCCEEDED","event_time_ms":1725000000123,"instrument_count":2,"decision_count":0}'
+  --payload '{"status":"FAILED","event_time_ms":1725000000123,"instrument_count":2,"error_category":"fixture_failure"}'
 ```
 
 For a matching Discord destination, the dry-run response includes the exact native `discord_preview`
