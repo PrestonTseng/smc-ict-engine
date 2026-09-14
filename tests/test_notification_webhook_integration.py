@@ -7,9 +7,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
 
-from smc_ict.application.notifications import NotificationRouter
-from smc_ict.application.ports import NotificationEvent
-from smc_ict.configuration.models import (
+from trading_research.application.notifications import NotificationRouter
+from trading_research.application.ports import NotificationEvent
+from trading_research.configuration.models import (
     BatchingConfig,
     DeduplicationConfig,
     NotificationConfig,
@@ -106,7 +106,7 @@ def test_generic_webhooks_use_real_local_tls_and_isolate_a_failed_destination(
         ),
     )
     try:
-        from smc_ict.adapters.notifications.generic_webhook import GenericWebhookNotifier
+        from trading_research.adapters.notifications.generic_webhook import GenericWebhookNotifier
 
         router = NotificationRouter(
             config,

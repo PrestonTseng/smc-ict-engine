@@ -8,12 +8,12 @@ from types import SimpleNamespace
 import pytest
 from test_backtest_reporting import MARKET, SCENARIO
 
-from smc_ict.adapters.persistence.sqlite import SQLiteRepository
-from smc_ict.application.graph import ConfiguredNode, RunContext
-from smc_ict.application.ports import InstrumentMapping
-from smc_ict.configuration import load_backtest_text, load_market_data_text
-from smc_ict.configuration.models import SignalConfig, StrategyConfig, frozen_mapping
-from smc_ict.domain import ClosedCandle, Observation
+from trading_research.adapters.persistence.sqlite import SQLiteRepository
+from trading_research.application.graph import ConfiguredNode, RunContext
+from trading_research.application.ports import InstrumentMapping
+from trading_research.configuration import load_backtest_text, load_market_data_text
+from trading_research.configuration.models import SignalConfig, StrategyConfig, frozen_mapping
+from trading_research.domain import ClosedCandle, Observation
 
 INTEGRATION_SCENARIO = SCENARIO.replace(
     'start: "2026-01-01T00:00:00Z"', 'start: "1970-01-01T00:05:00Z"'
@@ -122,7 +122,7 @@ def _strategy() -> StrategyConfig:
 def test_backtest_composition_runs_readiness_snapshot_offline_replay_and_report(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from smc_ict.composition import runtime_services
+    from trading_research.composition import runtime_services
 
     data = tmp_path / "data"
     config = tmp_path / "config"
@@ -131,7 +131,7 @@ def test_backtest_composition_runs_readiness_snapshot_offline_replay_and_report(
     scenario_path = tmp_path / "backtests" / "fixture" / "fixture.yaml"
     scenario_path.parent.mkdir(parents=True)
     scenario_path.write_text(INTEGRATION_SCENARIO, encoding="utf-8")
-    repository = SQLiteRepository(data / "smc_ict.db")
+    repository = SQLiteRepository(data / "trading_research.db")
     repository.store_candle_page(
         tuple(_candle(minute) for minute in range(15)),
         successful_sync_ms=15 * 60_000,
@@ -140,7 +140,7 @@ def test_backtest_composition_runs_readiness_snapshot_offline_replay_and_report(
     table_counts_before = repository.database_status()
     monkeypatch.setenv("DATA_FOLDER", str(data))
     monkeypatch.setenv("CONFIG_FOLDER", str(config))
-    monkeypatch.setenv("SMC_ICT_GIT_COMMIT", "4" * 40)
+
     monkeypatch.setattr(
         runtime_services,
         "load_backtest",
@@ -177,7 +177,7 @@ def test_backtest_composition_runs_readiness_snapshot_offline_replay_and_report(
 def test_backtest_cli_accepts_only_a_scenario_and_delegates(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from smc_ict import cli
+    from trading_research import cli
 
     calls: list[str] = []
     receipt = SimpleNamespace(

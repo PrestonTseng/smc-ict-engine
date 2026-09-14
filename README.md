@@ -1,8 +1,12 @@
-# smc-ict-engine
+# Trading Research Engine
 
-`smc-ict-engine` is a command-line research engine for deterministic evaluation of completed public-market candles. It does not trade.
+Trading Research Engine is a command-line research engine for deterministic evaluation of completed public-market candles. The distribution and image slug is `trading-research-engine`. It does not trade.
 
 The engine stores research receipts in SQLite. It has no web service, order path, broker credentials, or live-trading feature.
+
+This repository describes a local candidate only. The GitHub repository rename, production database
+cutover, and production deployment are separate owner-authorized actions; none is performed by the
+build, migration tests, or verification commands in this repository.
 
 ## Architecture
 
@@ -23,37 +27,37 @@ The Compose service owns the internal scheduler. Do not install host cron for th
 
 The fixed database contract is:
 
-- Host path: `${DATA_FOLDER}/smc_ict.db`
-- Container path: `/data/smc_ict.db`
+- Host path: `${DATA_FOLDER}/trading_research.db`
+- Container path: `/data/trading_research.db`
 - Bind mount: `${DATA_FOLDER}:/data` (the only writable application bind)
 
 Bootstrap the writable data directory and the one Discord secret before you start Compose. The
 container runs as UID/GID `10001:10001`, so the host bind must be writable by that identity:
 
 ```bash
-export DATA_FOLDER="/absolute/path/to/smc-ict-data"
+export DATA_FOLDER="/absolute/path/to/trading-research-data"
 sudo install -d -m 0750 -o 10001 -g 10001 "$DATA_FOLDER"
 install -d -m 0700 secrets
 umask 077
 read -rsp 'Discord webhook URL: ' DISCORD_WEBHOOK_URL && printf '\n'
 printf '%s' "$DISCORD_WEBHOOK_URL" > secrets/discord_webhook_url
 unset DISCORD_WEBHOOK_URL
-export SMC_ICT_GIT_COMMIT="$(git rev-parse HEAD)"
 docker compose config --quiet
 docker compose build engine
 docker compose up -d engine
 ```
 
-The sample has one `discord_debug` destination for all five event types. It resolves only
-`/run/secrets/discord_webhook_url`, mounted from `./secrets/discord_webhook_url`. Do not commit the
-resolved endpoint, `.env`, `secrets/`, databases, backups, or logs. See `docs/operations.md` for the
-copy-ready rotation, health, database, log, manual-run, and shutdown commands.
+The sample has one `discord_debug` destination for `decision_found` and `run_failed` events. It
+resolves only `/run/secrets/discord_webhook_url`, mounted from `./secrets/discord_webhook_url`. Do not
+commit the resolved endpoint, `.env`, `secrets/`, databases, backups, or logs. See
+`docs/operations.md` for the copy-ready rotation, health, database, log, manual-run, and shutdown
+commands.
 
 Read readiness and logs:
 
 ```sh
 docker compose ps
-uv run smc-ict database status
+uv run trading-research database status
 docker compose logs --follow engine
 ```
 
@@ -74,7 +78,7 @@ Validate all configured files before an operation:
 
 ```sh
 uv sync --dev
-uv run smc-ict validate \
+uv run trading-research validate \
   --strategy strategies/source-aligned-research.yaml \
   --market-data config/market-data.yaml \
   --schedule config/schedule.yaml \
@@ -93,32 +97,39 @@ Bootstrap or inspect a local database:
 ```sh
 export DATA_FOLDER="$(pwd)/data"
 export CONFIG_FOLDER="$(pwd)/config"
-uv run smc-ict database bootstrap
-uv run smc-ict database status
+uv run trading-research database bootstrap
+uv run trading-research database status
 ```
 
-Host commands derive `smc_ict.db`, `engine.lock`, and `scheduler.ready` only from
+Host commands derive `trading_research.db`, `engine.lock`, and `scheduler.ready` only from
 `DATA_FOLDER`; commands that compose runtime services derive their configuration root only from
 `CONFIG_FOLDER`. Both roots must be normalized absolute paths. Operation-level path overrides are
 intentionally rejected.
 
-The notifier dry test validates a bounded event payload without a delivery attempt:
+The notifier dry test validates a bounded event payload without a delivery attempt. Select an event
+enabled for at least one destination to receive its adapter preview; a filtered event returns no
+matching destination or preview.
 
 ```sh
-uv run smc-ict notifier-test \
+uv run trading-research notifier-test \
   --notifications config/notifications.yaml \
-  --event run_succeeded \
+  --event run_failed \
   --run-id fixture-run \
   --strategy-id source-aligned-research \
-  --payload '{"decision_count":0}'
+  --payload '{"status":"FAILED","event_time_ms":1725000000123,"instrument_count":2,"error_category":"fixture_failure"}'
 ```
+
+For a matching Discord destination, the dry-run response includes the exact native `discord_preview`
+card while keeping `delivery_attempted` false. It does not resolve the webhook secret or contact an
+endpoint. Lifecycle cards are sent separately; terminal setup/no-setup results batch only within one
+run and closed-bar boundary.
 
 Run a manual receipt path:
 
 ```sh
 export DATA_FOLDER="$(pwd)/data"
 export CONFIG_FOLDER="$(pwd)/config"
-uv run smc-ict run \
+uv run trading-research run \
   --strategy strategies/source-aligned-research.yaml \
   --notifications config/notifications.yaml \
   --trigger manual
@@ -135,8 +146,7 @@ Backtests use the same global `config/market-data.yaml`, canonical candle store,
 ```sh
 export DATA_FOLDER="$(pwd)/data"
 export CONFIG_FOLDER="$(pwd)/config"
-export SMC_ICT_GIT_COMMIT="$(git rev-parse HEAD)"
-uv run smc-ict backtest backtests/source-aligned-research/one-year-baseline.yaml
+uv run trading-research backtest backtests/source-aligned-research/one-year-baseline.yaml
 ```
 
 V1 accepts only `touch_limit` entries. A pending entry expires after the configured number of
@@ -150,13 +160,17 @@ V1 also fixes these settings:
 
 The command synchronizes the requested period plus strategy warm-up under the shared writer lock, creates a short-lived SQLite online snapshot, releases the lock, and performs replay, simulation, and reporting offline. It publishes `${DATA_FOLDER}/backtests/<backtest-id>/` only after all six artifacts are complete:
 
-- `manifest.json` binds immutable input identities and the byte size and SHA-256 of every payload artifact.
+- `manifest.json` version 2 binds the automatic installed-source `code_hash`, immutable input identities, and the byte size and SHA-256 of every payload artifact.
 - `decisions.jsonl` and `pipeline-traces.jsonl` preserve every ordered evaluation, pass/reject/unavailable reason, and first rejection.
 - `trades.jsonl` contains normalized, one-unit simulated outcomes without account sizing.
 - `summary.json` contains overall, instrument, direction, disposition, and unavailable-reason metrics.
 - `report.html` embeds each canonical evaluation as a deterministic directly addressable gzip record, plus a compact chunked filter index, so each page decompresses at most its 25 selected evaluations with no CDN or network dependency. Browsers without the standard `DecompressionStream` gzip primitive show an explicit compatibility failure instead of partial evidence.
 
 An identical rerun verifies and reuses byte-identical output. If any existing artifact differs, the command fails without overwriting it. A failure before publication leaves no partial result directory and never writes backtest rows to the five production tables.
+
+Version 1 report directories remain immutable historical evidence. Their manifests continue to
+identify the recorded Git commit; they are never rewritten or assigned a `code_hash`. Newly
+published version 2 manifests use only the automatically calculated source hash.
 
 The offline report benchmark and Chromium probe do not access a provider. The benchmark creates
 synthetic replay-shaped evaluations. It tests report publication and browser limits, not strategy
@@ -203,7 +217,7 @@ Start the scheduler outside Compose only for local diagnosis:
 ```sh
 export DATA_FOLDER="$(pwd)/data"
 export CONFIG_FOLDER="$(pwd)/config"
-uv run smc-ict scheduler \
+uv run trading-research scheduler \
   --schedule config/schedule.yaml
 ```
 
@@ -211,7 +225,7 @@ While that scheduler is running, read its readiness marker from another shell wi
 `DATA_FOLDER`:
 
 ```sh
-uv run smc-ict scheduler-health
+uv run trading-research scheduler-health
 ```
 
 ## Strategy DAG authoring
@@ -237,15 +251,15 @@ Stop the engine before a backup or restore. SQLite backups must use a consistent
 ```sh
 docker compose stop engine
 mkdir -p backups
-sqlite3 "$DATA_FOLDER/smc_ict.db" '.backup backups/smc_ict.db'
-sqlite3 backups/smc_ict.db 'PRAGMA integrity_check;'
+sqlite3 "$DATA_FOLDER/trading_research.db" '.backup backups/trading_research.db'
+sqlite3 backups/trading_research.db 'PRAGMA integrity_check;'
 ```
 
 Restore only after you stop the service:
 
 ```sh
 docker compose stop engine
-cp backups/smc_ict.db "$DATA_FOLDER/smc_ict.db"
+cp backups/trading_research.db "$DATA_FOLDER/trading_research.db"
 docker compose up -d engine
 ```
 

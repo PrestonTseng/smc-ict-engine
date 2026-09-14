@@ -5,9 +5,9 @@ from typing import Never
 
 
 def test_router_fans_out_in_destination_id_order_with_independent_filters() -> None:
-    from smc_ict.application.notifications import NotificationRouter
-    from smc_ict.application.ports import DeliveryReceipt, NotificationEvent
-    from smc_ict.configuration.models import (
+    from trading_research.application.notifications import NotificationRouter
+    from trading_research.application.ports import DeliveryReceipt, NotificationEvent
+    from trading_research.configuration.models import (
         BatchingConfig,
         DeduplicationConfig,
         NotificationConfig,
@@ -77,9 +77,9 @@ def test_router_fans_out_in_destination_id_order_with_independent_filters() -> N
 
 
 def test_router_deduplicates_per_destination_without_suppressing_other_destinations() -> None:
-    from smc_ict.application.notifications import NotificationRouter
-    from smc_ict.application.ports import DeliveryReceipt, NotificationEvent
-    from smc_ict.configuration.models import (
+    from trading_research.application.notifications import NotificationRouter
+    from trading_research.application.ports import DeliveryReceipt, NotificationEvent
+    from trading_research.configuration.models import (
         BatchingConfig,
         DeduplicationConfig,
         NotificationConfig,
@@ -148,8 +148,8 @@ def test_router_deduplicates_per_destination_without_suppressing_other_destinati
 
 
 def test_router_does_not_construct_an_adapter_for_a_disabled_destination() -> None:
-    from smc_ict.application.notifications import NotificationRouter
-    from smc_ict.configuration.models import (
+    from trading_research.application.notifications import NotificationRouter
+    from trading_research.configuration.models import (
         BatchingConfig,
         DeduplicationConfig,
         NotificationConfig,
@@ -181,9 +181,9 @@ def test_router_does_not_construct_an_adapter_for_a_disabled_destination() -> No
 
 
 def test_router_isolates_enabled_destination_construction_failures() -> None:
-    from smc_ict.application.notifications import NotificationRouter
-    from smc_ict.application.ports import DeliveryReceipt, NotificationEvent
-    from smc_ict.configuration.models import (
+    from trading_research.application.notifications import NotificationRouter
+    from trading_research.application.ports import DeliveryReceipt, NotificationEvent
+    from trading_research.configuration.models import (
         BatchingConfig,
         DeduplicationConfig,
         NotificationConfig,
@@ -242,10 +242,10 @@ def test_router_isolates_enabled_destination_construction_failures() -> None:
     ]
 
 
-def test_router_batches_multiple_events_per_destination_in_order() -> None:
-    from smc_ict.application.notifications import NotificationRouter
-    from smc_ict.application.ports import DeliveryReceipt, NotificationEvent
-    from smc_ict.configuration.models import (
+def test_router_flushes_terminal_results_before_delivering_lifecycle_event_separately() -> None:
+    from trading_research.application.notifications import NotificationRouter
+    from trading_research.application.ports import DeliveryReceipt, NotificationEvent
+    from trading_research.configuration.models import (
         BatchingConfig,
         DeduplicationConfig,
         NotificationConfig,
@@ -274,7 +274,10 @@ def test_router_batches_multiple_events_per_destination_in_order() -> None:
         adapter_id = "generic_webhook"
 
         def deliver(self, event: NotificationEvent) -> DeliveryReceipt:
-            raise AssertionError("multi-event routing must use batching")
+            batches.append((event.event_type,))
+            return DeliveryReceipt(
+                "only", self.adapter_id, "event", "dedupe", None, 1, "SUCCESS", None, 204
+            )
 
         def deliver_batch(self, events: tuple[NotificationEvent, ...]) -> DeliveryReceipt:
             batches.append(tuple(event.event_type for event in events))
@@ -295,13 +298,13 @@ def test_router_batches_multiple_events_per_destination_in_order() -> None:
     )
 
     assert receipt.outcome == "ALL_SUCCESS"
-    assert batches == [("decision_found", "run_succeeded")]
+    assert batches == [("decision_found",), ("run_succeeded",)]
 
 
 def test_router_flushes_pending_destination_before_accepting_event_at_deadline() -> None:
-    from smc_ict.application.notifications import NotificationRouter
-    from smc_ict.application.ports import DeliveryReceipt, NotificationEvent
-    from smc_ict.configuration.models import (
+    from trading_research.application.notifications import NotificationRouter
+    from trading_research.application.ports import DeliveryReceipt, NotificationEvent
+    from trading_research.configuration.models import (
         BatchingConfig,
         DeduplicationConfig,
         NotificationConfig,
@@ -363,13 +366,81 @@ def test_router_flushes_pending_destination_before_accepting_event_at_deadline()
     assert batches == [("BTC-USDT-PERP", "ETH-USDT-PERP"), ("XRP-USDT-PERP",)]
 
 
+def test_router_never_batches_terminal_events_across_run_or_closed_bar_boundary() -> None:
+    from trading_research.application.notifications import NotificationRouter
+    from trading_research.application.ports import DeliveryReceipt, NotificationEvent
+    from trading_research.configuration.models import (
+        BatchingConfig,
+        DeduplicationConfig,
+        NotificationConfig,
+        NotificationDestination,
+        RedactionConfig,
+        RetryConfig,
+        SecretRef,
+        frozen_mapping,
+    )
+
+    destination = NotificationDestination(
+        "generic_webhook",
+        True,
+        ("no_decision",),
+        SecretRef("env", "HOOK"),
+        1,
+        RetryConfig(1, ()),
+        DeduplicationConfig(1, ("event_type", "run_id", "instrument_id")),
+        BatchingConfig(8, 10),
+        RedactionConfig((), ()),
+        "warning",
+    )
+    batches: list[tuple[tuple[str, object], ...]] = []
+
+    class Adapter:
+        adapter_id = "generic_webhook"
+
+        def deliver(self, event: NotificationEvent) -> DeliveryReceipt:
+            batches.append(((event.run_id, event.payload.get("closed_bar_time_ms")),))
+            return DeliveryReceipt(
+                "only", self.adapter_id, "event", "dedupe", None, 1, "SUCCESS", None, 204
+            )
+
+        def deliver_batch(self, events: tuple[NotificationEvent, ...]) -> DeliveryReceipt:
+            batches.append(
+                tuple((event.run_id, event.payload.get("closed_bar_time_ms")) for event in events)
+            )
+            return DeliveryReceipt(
+                "only", self.adapter_id, "events", "dedupe", "batch", 1, "SUCCESS", None, 204
+            )
+
+    router = NotificationRouter(
+        NotificationConfig(True, frozen_mapping({"only": destination})),
+        adapter_factory=lambda _destination_id, _destination: Adapter(),
+        clock_seconds=lambda: 20,
+    )
+    events = (
+        NotificationEvent(
+            "no_decision", "run-1", "BTC-USDT-PERP", "strategy", 1, {"closed_bar_time_ms": 1}
+        ),
+        NotificationEvent(
+            "no_decision", "run-1", "ETH-USDT-PERP", "strategy", 1, {"closed_bar_time_ms": 2}
+        ),
+        NotificationEvent(
+            "no_decision", "run-2", "XRP-USDT-PERP", "strategy", 1, {"closed_bar_time_ms": 2}
+        ),
+    )
+
+    router.deliver_all(events)
+    router.close()
+
+    assert batches == [(("run-1", 1),), (("run-1", 2),), (("run-2", 2),)]
+
+
 def test_repeated_two_event_batch_is_deduplicated_by_a_fresh_router_using_sqlite(
     tmp_path: Path,
 ) -> None:
-    from smc_ict.adapters.persistence.sqlite import SQLiteRepository
-    from smc_ict.application.notifications import NotificationRouter
-    from smc_ict.application.ports import DeliveryReceipt, NotificationEvent, RunRecord
-    from smc_ict.configuration.models import (
+    from trading_research.adapters.persistence.sqlite import SQLiteRepository
+    from trading_research.application.notifications import NotificationRouter
+    from trading_research.application.ports import DeliveryReceipt, NotificationEvent, RunRecord
+    from trading_research.configuration.models import (
         BatchingConfig,
         DeduplicationConfig,
         NotificationConfig,
@@ -393,7 +464,8 @@ def test_repeated_two_event_batch_is_deduplicated_by_a_fresh_router_using_sqlite
             "provider",
             "LINEAR_PERPETUAL",
             "1" * 64,
-            "2" * 40,
+            None,
+            "2" * 64,
             0,
             59_999,
             "3" * 64,
@@ -419,7 +491,10 @@ def test_repeated_two_event_batch_is_deduplicated_by_a_fresh_router_using_sqlite
         adapter_id = "generic_webhook"
 
         def deliver(self, event: NotificationEvent) -> DeliveryReceipt:
-            raise AssertionError("two events must use the batch path")
+            calls.append((event.event_type,))
+            return DeliveryReceipt(
+                "only", self.adapter_id, "event", "single", None, 1, "SUCCESS", None, 204
+            )
 
         def deliver_batch(self, events: tuple[NotificationEvent, ...]) -> DeliveryReceipt:
             calls.append(tuple(event.event_type for event in events))
@@ -446,7 +521,7 @@ def test_repeated_two_event_batch_is_deduplicated_by_a_fresh_router_using_sqlite
     ).deliver_all(events)
 
     assert first.outcome == repeated.outcome == "ALL_SUCCESS"
-    assert calls == [("decision_found", "run_succeeded")]
+    assert calls == [("decision_found",), ("run_succeeded",)]
     assert [receipt.outcome for receipt in repeated.receipts] == [
         "DEDUPLICATED",
         "DEDUPLICATED",

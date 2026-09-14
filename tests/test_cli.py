@@ -13,7 +13,7 @@ import pytest
 
 def _cli(*args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["uv", "run", "smc-ict", *args],
+        ["uv", "run", "trading-research", *args],
         text=True,
         capture_output=True,
         timeout=10,
@@ -39,7 +39,7 @@ def test_actual_cli_accepts_implemented_strategy_before_bootstrapping_database(
 
     bootstrap = _cli("database", "bootstrap")
     assert bootstrap.returncode == 0, bootstrap.stderr
-    assert json.loads(bootstrap.stdout) == {"schema_version": 1, "status": "READY", "tables": 5}
+    assert json.loads(bootstrap.stdout) == {"schema_version": 2, "status": "READY", "tables": 5}
 
     status = _cli("database", "status")
     assert status.returncode == 0, status.stderr
@@ -47,7 +47,7 @@ def test_actual_cli_accepts_implemented_strategy_before_bootstrapping_database(
 
 
 def test_cli_uses_global_runtime_authority_and_sync_range_accepts_only_dates() -> None:
-    from smc_ict.cli import _parser
+    from trading_research.cli import _parser
 
     parser = _parser()
     sync = parser.parse_args(
@@ -81,7 +81,7 @@ def test_cli_uses_global_runtime_authority_and_sync_range_accepts_only_dates() -
 def test_sync_range_cli_delegates_to_the_shared_application_service(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from smc_ict import cli
+    from trading_research import cli
 
     calls: list[tuple[str, str]] = []
 
@@ -116,7 +116,7 @@ def test_sync_range_cli_delegates_to_the_shared_application_service(
 def test_run_requires_the_global_config_folder_before_composition(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from smc_ict import cli
+    from trading_research import cli
 
     monkeypatch.setenv("DATA_FOLDER", str(tmp_path))
     monkeypatch.delenv("CONFIG_FOLDER", raising=False)
@@ -160,6 +160,70 @@ def test_notifier_test_is_a_redacted_dry_run_without_delivery(tmp_path: Path) ->
     }
 
 
+def test_notifier_test_includes_human_discord_preview_without_resolving_secret(
+    tmp_path: Path,
+) -> None:
+    notifications = tmp_path / "notifications.yaml"
+    notifications.write_text(
+        """notifications:
+  enabled: true
+  destinations:
+    discord_preview:
+      adapter: discord_webhook
+      enabled: true
+      enabled_events: [run_succeeded]
+      endpoint: {env: MUST_NOT_BE_RESOLVED}
+      timeout_seconds: 1
+      retries: {maximum_attempts: 1, backoff_seconds: []}
+      deduplication: {window_seconds: 1, key_fields: [event_type, run_id]}
+      batching: {maximum_events: 1, flush_seconds: 1}
+      redaction: {headers: [authorization], query_parameters: [token]}
+      failure_policy: warning
+""",
+        encoding="utf-8",
+    )
+
+    result = _cli(
+        "notifier-test",
+        "--notifications",
+        str(notifications),
+        "--event",
+        "run_succeeded",
+        "--run-id",
+        "1234567890abcdef",
+        "--strategy-id",
+        "fixture-strategy",
+        "--payload",
+        '{"status":"SUCCEEDED","event_time_ms":1725000000123,"instrument_count":2}',
+    )
+
+    assert result.returncode == 0, result.stderr
+    output = json.loads(result.stdout)
+    assert output["destinations"] == ["discord_preview"]
+    assert output["delivery_attempted"] is False
+    assert output["discord_preview"] == {
+        "allowed_mentions": {"parse": []},
+        "embeds": [
+            {
+                "color": 0x2ECC71,
+                "description": "**SUCCEEDED** · Evaluation lifecycle update.",
+                "fields": [
+                    {"inline": True, "name": "Strategy", "value": "fixture-strategy"},
+                    {"inline": True, "name": "Instruments", "value": "2"},
+                    {
+                        "inline": False,
+                        "name": "Event time",
+                        "value": "<t:1725000000:F> · <t:1725000000:R>",
+                    },
+                ],
+                "footer": {"text": "Run 12345678 · Schema v1"},
+                "timestamp": "2024-08-30T06:40:00.123Z",
+                "title": "✓ Evaluation complete",
+            }
+        ],
+    }
+
+
 def test_notifier_test_rejects_a_nested_payload_before_secret_resolution(tmp_path: Path) -> None:
     notifications = tmp_path / "notifications.yaml"
     notifications.write_text(
@@ -187,9 +251,9 @@ def test_notifier_test_rejects_a_nested_payload_before_secret_resolution(tmp_pat
 def test_cli_structured_logging_emits_only_allowlisted_notification_fields() -> None:
     script = """
 import logging
-from smc_ict.cli import _configure_logging
+from trading_research.cli import _configure_logging
 _configure_logging()
-logging.getLogger('smc_ict.application.notifications').info(
+logging.getLogger('trading_research.application.notifications').info(
     'notification_delivery_outcome',
     extra={
         'destination_id': 'discord_debug',
@@ -231,7 +295,7 @@ def test_write_makes_a_complete_json_line_visible_while_child_remains_alive() ->
             "-c",
             (
                 "import sys, time; "
-                "from smc_ict.cli import _write; "
+                "from trading_research.cli import _write; "
                 "_write({'status': 'READY'}); "
                 "sys.stderr.write('WRITE_RETURNED\\n'); "
                 "sys.stderr.flush(); "
@@ -274,7 +338,7 @@ def test_scheduler_cli_reports_readiness_and_shuts_down_gracefully(
         [
             "uv",
             "run",
-            "smc-ict",
+            "trading-research",
             "scheduler",
             "--schedule",
             str(schedule),
@@ -301,7 +365,7 @@ def test_scheduler_cli_reports_readiness_and_shuts_down_gracefully(
 
 
 def test_scheduler_cli_has_no_complete_job_retry_policy() -> None:
-    from smc_ict.cli import _parser
+    from trading_research.cli import _parser
 
     with pytest.raises(SystemExit):
         _parser().parse_args(
@@ -316,8 +380,8 @@ def test_scheduler_cli_has_no_complete_job_retry_policy() -> None:
 
 
 def test_one_shot_cli_runner_wires_all_implemented_plugins_without_network(tmp_path: Path) -> None:
-    from smc_ict.composition.runtime_services import build_engine_runner
-    from smc_ict.configuration import IMPLEMENTED_PLUGIN_IDS
+    from trading_research.composition.runtime_services import build_engine_runner
+    from trading_research.configuration import IMPLEMENTED_PLUGIN_IDS
 
     runner = build_engine_runner(tmp_path / "runtime.sqlite3", tmp_path / "engine.lock")
 

@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from smc_ict.adapters.persistence.sqlite import SQLiteRepository
-from smc_ict.application.ports import InstrumentMapping, KlinePage, KlineRequest
-from smc_ict.domain import ClosedCandle
+from trading_research.adapters.persistence.sqlite import SQLiteRepository
+from trading_research.application.ports import InstrumentMapping, KlinePage, KlineRequest
+from trading_research.domain import ClosedCandle
 
 
 def _candle(
@@ -81,7 +81,7 @@ class _Provider:
 
 
 def test_historical_sync_fetches_only_exact_missing_subranges(tmp_path: Path) -> None:
-    from smc_ict.application.historical_sync import HistoricalRangeSyncService
+    from trading_research.application.historical_sync import HistoricalRangeSyncService
 
     repository = SQLiteRepository(tmp_path / "runtime.sqlite3")
     repository.store_candle_page(
@@ -109,7 +109,7 @@ def test_historical_sync_fetches_only_exact_missing_subranges(tmp_path: Path) ->
 def test_historical_sync_all_returns_a_deterministic_provider_neutral_receipt(
     tmp_path: Path,
 ) -> None:
-    from smc_ict.application.historical_sync import HistoricalRangeSyncService
+    from trading_research.application.historical_sync import HistoricalRangeSyncService
 
     repository = SQLiteRepository(tmp_path / "runtime.sqlite3")
     provider = _Provider("okx_swap")
@@ -154,7 +154,7 @@ def test_historical_sync_all_returns_a_deterministic_provider_neutral_receipt(
 def test_historical_sync_rejects_a_future_range_even_when_rows_already_exist(
     tmp_path: Path,
 ) -> None:
-    from smc_ict.application.historical_sync import HistoricalRangeSyncService
+    from trading_research.application.historical_sync import HistoricalRangeSyncService
 
     repository = SQLiteRepository(tmp_path / "runtime.sqlite3")
     repository.store_candle_page(
@@ -172,7 +172,7 @@ def test_historical_sync_rejects_a_future_range_even_when_rows_already_exist(
 def test_interrupted_historical_sync_resumes_from_only_the_uncommitted_minutes(
     tmp_path: Path,
 ) -> None:
-    from smc_ict.application.historical_sync import HistoricalRangeSyncService
+    from trading_research.application.historical_sync import HistoricalRangeSyncService
 
     class InterruptedProvider(_Provider):
         def fetch_page(self, request: KlineRequest) -> KlinePage:
@@ -208,7 +208,7 @@ def test_interrupted_historical_sync_resumes_from_only_the_uncommitted_minutes(
 
 
 def test_historical_sync_rejects_a_gap_remaining_after_provider_completion() -> None:
-    from smc_ict.application.historical_sync import HistoricalRangeSyncService
+    from trading_research.application.historical_sync import HistoricalRangeSyncService
 
     class DroppingRepository:
         def store_candle_page(
@@ -239,7 +239,7 @@ def test_historical_sync_rejects_a_gap_remaining_after_provider_completion() -> 
 def test_standalone_sync_bootstraps_the_global_database_without_strategy_or_backtest(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from smc_ict.composition import runtime_services
+    from trading_research.composition import runtime_services
 
     config_folder = tmp_path / "config"
     data_folder = tmp_path / "data"
@@ -265,14 +265,14 @@ def test_standalone_sync_bootstraps_the_global_database_without_strategy_or_back
 
     assert receipt.provider == "binance_usdm"
     assert tuple(receipt.instruments) == ("BTC-USDT-PERP", "ETH-USDT-PERP")
-    assert (data_folder / "smc_ict.db").is_file()
+    assert (data_folder / "trading_research.db").is_file()
     assert [request.provider_symbol for request in provider.requests] == ["BTCUSDT", "ETHUSDT"]
 
 
 def test_standalone_sync_rejects_invalid_range_before_provider_composition(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from smc_ict.composition import runtime_services
+    from trading_research.composition import runtime_services
 
     config_folder = tmp_path / "config"
     config_folder.mkdir()
@@ -298,7 +298,7 @@ def test_standalone_sync_rejects_invalid_range_before_provider_composition(
 def test_standalone_sync_rejects_reversed_range_before_provider_composition(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from smc_ict.composition import runtime_services
+    from trading_research.composition import runtime_services
 
     monkeypatch.setenv("CONFIG_FOLDER", str(tmp_path / "config"))
     monkeypatch.setenv("DATA_FOLDER", str(tmp_path / "data"))

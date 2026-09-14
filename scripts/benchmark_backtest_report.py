@@ -5,22 +5,26 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import platform
 import resource
-import subprocess
 import time
 import tracemalloc
 from hashlib import sha256
 from pathlib import Path
 
-from smc_ict.adapters.reporting.jsonl import BacktestReportPublisher
-from smc_ict.application.backtesting import BacktestIdentity, RequiredRange
-from smc_ict.application.execution_simulator import SimulationResult
-from smc_ict.application.metrics import summarize_backtest
-from smc_ict.configuration import load_backtest, load_market_data, load_strategy
-from smc_ict.domain import Decision
-from smc_ict.domain.backtesting import PipelineStep, PipelineTrace, ReplayEvaluation, ReplayResult
+from trading_research.adapters.reporting.jsonl import BacktestReportPublisher
+from trading_research.application.backtesting import BacktestIdentity, RequiredRange
+from trading_research.application.execution_simulator import SimulationResult
+from trading_research.application.metrics import summarize_backtest
+from trading_research.configuration import load_backtest, load_market_data, load_strategy
+from trading_research.domain import Decision
+from trading_research.domain.backtesting import (
+    PipelineStep,
+    PipelineTrace,
+    ReplayEvaluation,
+    ReplayResult,
+)
+from trading_research.provenance import calculate_code_hash
 
 DEFAULT_EVALUATIONS = 210_240
 PAGE_SIZE = 25
@@ -119,13 +123,6 @@ def _max_rss_bytes() -> int:
     return value if platform.system() == "Darwin" else value * 1024
 
 
-def _git_commit() -> str:
-    configured = os.environ.get("SMC_ICT_GIT_COMMIT")
-    if configured:
-        return configured
-    return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-
-
 def run(*, count: int, output_root: Path) -> dict[str, object]:
     if count < 1 or count > DEFAULT_EVALUATIONS:
         raise ValueError(f"evaluations must be between 1 and {DEFAULT_EVALUATIONS}")
@@ -152,7 +149,7 @@ def run(*, count: int, output_root: Path) -> dict[str, object]:
         strategy_hash=_hash(strategy.canonical_dict()),
         market_data_hash=_hash(market_data.canonical_dict()),
         candle_data_hash=replay.data_hash,
-        git_commit=_git_commit(),
+        code_hash=calculate_code_hash(),
         period=scenario.period,
         required_range=required_range,
     )
@@ -177,14 +174,14 @@ def run(*, count: int, output_root: Path) -> dict[str, object]:
         for path in sorted(receipt.path.iterdir(), key=lambda item: item.name)
     }
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "benchmark_kind": "deterministic synthetic replay-shaped directly addressable report",
         "evaluation_count": count,
         "instrument_count": len(INSTRUMENTS),
         "execution_interval_minutes": 5,
         "ordered_trace_steps": 14,
         "backtest_id": receipt.backtest_id,
-        "git_commit": identity.git_commit,
+        "code_hash": identity.code_hash,
         "publication_status": receipt.status,
         "result_path": str(receipt.path.resolve()),
         "timings_seconds": {

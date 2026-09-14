@@ -3,14 +3,14 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from smc_ict.application.graph import ConfiguredNode, RunContext
-from smc_ict.configuration.models import (
+from trading_research.application.graph import ConfiguredNode, RunContext
+from trading_research.configuration.models import (
     BacktestPeriod,
     SignalConfig,
     StrategyConfig,
     frozen_mapping,
 )
-from smc_ict.domain import ClosedCandle, Observation
+from trading_research.domain import ClosedCandle, Observation
 
 
 def candle(minute: int) -> ClosedCandle:
@@ -127,7 +127,7 @@ def strategy(signals: tuple[SignalConfig, ...] | None = None) -> StrategyConfig:
 
 
 def test_replay_uses_exact_boundaries_and_never_exposes_future_bars() -> None:
-    from smc_ict.application.backtesting import PointInTimeReplay
+    from trading_research.application.backtesting import PointInTimeReplay
 
     seen: list[tuple[int, tuple[int, ...]]] = []
     replay = PointInTimeReplay(
@@ -147,7 +147,7 @@ def test_replay_uses_exact_boundaries_and_never_exposes_future_bars() -> None:
 
 
 def test_appending_future_candles_cannot_change_earlier_replay() -> None:
-    from smc_ict.application.backtesting import PointInTimeReplay
+    from trading_research.application.backtesting import PointInTimeReplay
 
     period = BacktestPeriod(5 * 60_000, 14 * 60_000)
 
@@ -166,7 +166,7 @@ def test_appending_future_candles_cannot_change_earlier_replay() -> None:
 
 
 def test_trace_covers_every_indicator_and_gate_and_preserves_first_rejection() -> None:
-    from smc_ict.application.backtesting import PointInTimeReplay
+    from trading_research.application.backtesting import PointInTimeReplay
 
     signals = tuple(
         SignalConfig.model_construct(
@@ -217,29 +217,31 @@ def test_trace_covers_every_indicator_and_gate_and_preserves_first_rejection() -
 
 
 def test_backtest_identity_hashes_every_immutable_input() -> None:
-    from smc_ict.application.backtesting import BacktestIdentity, RequiredRange
+    from trading_research.application.backtesting import BacktestIdentity, RequiredRange
 
     values = dict(
         scenario_hash="a" * 64,
         strategy_hash="b" * 64,
         market_data_hash="c" * 64,
         candle_data_hash="d" * 64,
-        git_commit="e" * 40,
+        code_hash="e" * 64,
         period=BacktestPeriod(300_000, 840_000),
         required_range=RequiredRange(0, 840_000),
     )
 
     first = BacktestIdentity.create(**values)
     second = BacktestIdentity.create(**values)
-    changed = BacktestIdentity.create(**(values | {"candle_data_hash": "f" * 64}))
+    changed_candles = BacktestIdentity.create(**(values | {"candle_data_hash": "f" * 64}))
+    changed_code = BacktestIdentity.create(**(values | {"code_hash": "f" * 64}))
 
     assert first == second
     assert len(first.backtest_id) == 64
-    assert first.backtest_id != changed.backtest_id
+    assert first.backtest_id != changed_candles.backtest_id
+    assert first.backtest_id != changed_code.backtest_id
 
 
 def test_trace_uses_the_ordered_policy_unavailable_result_for_missing_levels() -> None:
-    from smc_ict.application.backtesting import PointInTimeReplay
+    from trading_research.application.backtesting import PointInTimeReplay
 
     signals = (
         SignalConfig.model_construct(
@@ -268,7 +270,7 @@ def test_trace_uses_the_ordered_policy_unavailable_result_for_missing_levels() -
 
 
 def test_replay_evaluation_has_a_canonical_ordered_record() -> None:
-    from smc_ict.application.backtesting import PointInTimeReplay
+    from trading_research.application.backtesting import PointInTimeReplay
 
     evaluation = (
         PointInTimeReplay(

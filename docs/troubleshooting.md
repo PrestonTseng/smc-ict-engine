@@ -34,8 +34,8 @@ Do not paste a webhook URL into a ticket. Correct the secret source, then run th
 Stop the engine before a restore. Run these commands against the backup:
 
 ```sh
-sqlite3 backups/smc_ict.db 'PRAGMA integrity_check;'
-sqlite3 backups/smc_ict.db 'PRAGMA foreign_key_check;'
+sqlite3 backups/trading_research.db 'PRAGMA integrity_check;'
+sqlite3 backups/trading_research.db 'PRAGMA foreign_key_check;'
 ```
 
 ## `existing backtest result differs`

@@ -9,9 +9,9 @@ import pytest
 
 
 def test_generic_webhook_resolves_secret_at_adapter_boundary_retries_and_redacts_errors() -> None:
-    from smc_ict.adapters.notifications.generic_webhook import GenericWebhookNotifier
-    from smc_ict.application.ports import NotificationEvent
-    from smc_ict.configuration.models import (
+    from trading_research.adapters.notifications.generic_webhook import GenericWebhookNotifier
+    from trading_research.application.ports import NotificationEvent
+    from trading_research.configuration.models import (
         BatchingConfig,
         DeduplicationConfig,
         NotificationDestination,
@@ -76,8 +76,8 @@ def test_generic_webhook_resolves_secret_at_adapter_boundary_retries_and_redacts
 
 
 def test_generic_webhook_invalid_secret_never_echoes_its_value() -> None:
-    from smc_ict.adapters.notifications.generic_webhook import GenericWebhookNotifier
-    from smc_ict.configuration.models import (
+    from trading_research.adapters.notifications.generic_webhook import GenericWebhookNotifier
+    from trading_research.configuration.models import (
         BatchingConfig,
         DeduplicationConfig,
         NotificationDestination,
@@ -112,9 +112,9 @@ def test_generic_webhook_invalid_secret_never_echoes_its_value() -> None:
 def test_generic_webhook_accepts_one_terminal_line_ending_from_file(
     monkeypatch: pytest.MonkeyPatch, line_ending: str
 ) -> None:
-    from smc_ict.adapters.notifications.generic_webhook import GenericWebhookNotifier
-    from smc_ict.application.ports import NotificationEvent
-    from smc_ict.configuration.models import (
+    from trading_research.adapters.notifications.generic_webhook import GenericWebhookNotifier
+    from trading_research.application.ports import NotificationEvent
+    from trading_research.configuration.models import (
         BatchingConfig,
         DeduplicationConfig,
         NotificationDestination,
@@ -181,8 +181,8 @@ def test_generic_webhook_accepts_one_terminal_line_ending_from_file(
 def test_generic_webhook_rejects_other_file_secret_whitespace_and_controls(
     monkeypatch: pytest.MonkeyPatch, secret: str
 ) -> None:
-    from smc_ict.adapters.notifications.generic_webhook import GenericWebhookNotifier
-    from smc_ict.configuration.models import (
+    from trading_research.adapters.notifications.generic_webhook import GenericWebhookNotifier
+    from trading_research.configuration.models import (
         BatchingConfig,
         DeduplicationConfig,
         NotificationDestination,
@@ -212,9 +212,9 @@ def test_generic_webhook_rejects_other_file_secret_whitespace_and_controls(
 
 
 def test_generic_webhook_does_not_retry_permanent_http_400() -> None:
-    from smc_ict.adapters.notifications.generic_webhook import GenericWebhookNotifier
-    from smc_ict.application.ports import NotificationEvent
-    from smc_ict.configuration.models import (
+    from trading_research.adapters.notifications.generic_webhook import GenericWebhookNotifier
+    from trading_research.application.ports import NotificationEvent
+    from trading_research.configuration.models import (
         BatchingConfig,
         DeduplicationConfig,
         NotificationDestination,
@@ -251,9 +251,9 @@ def test_generic_webhook_does_not_retry_permanent_http_400() -> None:
 
 
 def test_generic_webhook_batch_posts_ordered_events_once() -> None:
-    from smc_ict.adapters.notifications.generic_webhook import GenericWebhookNotifier
-    from smc_ict.application.ports import NotificationEvent
-    from smc_ict.configuration.models import (
+    from trading_research.adapters.notifications.generic_webhook import GenericWebhookNotifier
+    from trading_research.application.ports import NotificationEvent
+    from trading_research.configuration.models import (
         BatchingConfig,
         DeduplicationConfig,
         NotificationDestination,
@@ -324,8 +324,8 @@ def test_generic_webhook_batch_posts_ordered_events_once() -> None:
 def test_generic_webhook_rejects_empty_userinfo_and_whitespace_without_echoing_secret(
     unsafe_endpoint: str,
 ) -> None:
-    from smc_ict.adapters.notifications.generic_webhook import GenericWebhookNotifier
-    from smc_ict.configuration.models import (
+    from trading_research.adapters.notifications.generic_webhook import GenericWebhookNotifier
+    from trading_research.configuration.models import (
         BatchingConfig,
         DeduplicationConfig,
         NotificationDestination,

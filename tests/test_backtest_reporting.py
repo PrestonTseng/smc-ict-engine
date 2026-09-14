@@ -11,17 +11,22 @@ from typing import Any
 
 import pytest
 
-from smc_ict.application.backtesting import BacktestIdentity, RequiredRange
-from smc_ict.application.execution_simulator import (
+from trading_research.application.backtesting import BacktestIdentity, RequiredRange
+from trading_research.application.execution_simulator import (
     ExecutionSimulator,
     SimulationResult,
     TradeRecord,
 )
-from smc_ict.application.metrics import summarize_backtest
-from smc_ict.configuration import load_backtest_text, load_market_data_text, load_strategy
-from smc_ict.configuration.models import BacktestPeriod
-from smc_ict.domain import ClosedCandle, Decision
-from smc_ict.domain.backtesting import PipelineStep, PipelineTrace, ReplayEvaluation, ReplayResult
+from trading_research.application.metrics import summarize_backtest
+from trading_research.configuration import load_backtest_text, load_market_data_text, load_strategy
+from trading_research.configuration.models import BacktestPeriod
+from trading_research.domain import ClosedCandle, Decision
+from trading_research.domain.backtesting import (
+    PipelineStep,
+    PipelineTrace,
+    ReplayEvaluation,
+    ReplayResult,
+)
 
 SCENARIO = """\
 backtest:
@@ -103,7 +108,7 @@ def _evidence():
         strategy_hash="2" * 64,
         market_data_hash="3" * 64,
         candle_data_hash=replay.data_hash,
-        git_commit="4" * 40,
+        code_hash="4" * 64,
         period=BacktestPeriod(1_767_225_600_000, 1_767_225_660_000),
         required_range=RequiredRange(1_767_225_300_000, 1_767_225_660_000),
     )
@@ -135,7 +140,7 @@ def _html_evidence(path: Path) -> dict[str, object]:
 
 
 def _publish(root: Path):
-    from smc_ict.adapters.reporting.jsonl import BacktestReportPublisher
+    from trading_research.adapters.reporting.jsonl import BacktestReportPublisher
 
     identity, replay, simulation, metrics = _evidence()
     receipt = BacktestReportPublisher(root).publish(
@@ -206,7 +211,7 @@ def _ambient_context_report(root: Path, *, precision: int, rounding: str) -> dic
             execution_bar_minutes=1,
         ).run(replay.evaluations, candles)
         metrics = summarize_backtest(replay.evaluations, simulation.trades)
-        from smc_ict.adapters.reporting.jsonl import BacktestReportPublisher
+        from trading_research.adapters.reporting.jsonl import BacktestReportPublisher
 
         receipt = BacktestReportPublisher(root).publish(
             identity=identity,
@@ -254,8 +259,10 @@ def test_report_publication_emits_consistent_canonical_artifacts(tmp_path: Path)
     assert summary["decision_status_counts"] == [["READY", 1]]
 
     manifest = json.loads((result / "manifest.json").read_bytes())
+    assert manifest["schema_version"] == 2
     assert manifest["backtest_id"] == identity.backtest_id
-    assert manifest["identity"]["git_commit"] == "4" * 40
+    assert manifest["identity"]["code_hash"] == "4" * 64
+    assert "git_commit" not in manifest["identity"]
     assert manifest["assumptions"]["research_only"] is True
     assert manifest["assumptions"]["position_sizing"] is False
     assert set(manifest["artifacts"]) == names - {"manifest.json"}
@@ -319,7 +326,7 @@ def test_identical_result_comparison_streams_artifacts_without_read_bytes(
 def test_report_failure_leaves_no_partial_result_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from smc_ict.adapters.reporting import jsonl
+    from trading_research.adapters.reporting import jsonl
 
     monkeypatch.setattr(
         jsonl.html_reporting,
@@ -336,7 +343,7 @@ def test_report_failure_leaves_no_partial_result_directory(
 def test_report_publication_streams_html_instead_of_rendering_one_bytes_value(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from smc_ict.adapters.reporting import jsonl
+    from trading_research.adapters.reporting import jsonl
 
     monkeypatch.setattr(
         jsonl,
@@ -473,7 +480,7 @@ def test_html_projects_every_canonical_artifact_into_complete_report_views(tmp_p
 
 
 def test_html_escapes_untrusted_evidence_and_enforces_an_offline_csp(tmp_path: Path) -> None:
-    from smc_ict.adapters.reporting.html import render_report
+    from trading_research.adapters.reporting.html import render_report
 
     attack = '</script><script src="https://attacker.invalid/payload.js">alert(1)</script>&'
     report = tmp_path / "report.html"
@@ -498,7 +505,7 @@ def test_html_escapes_untrusted_evidence_and_enforces_an_offline_csp(tmp_path: P
 
 
 def test_html_bounds_trace_dom_and_exposes_filter_and_page_boundaries(tmp_path: Path) -> None:
-    from smc_ict.adapters.reporting.html import render_report
+    from trading_research.adapters.reporting.html import render_report
 
     count = 53
     decisions: list[dict[str, object]] = [
@@ -575,7 +582,7 @@ def test_html_bounds_trace_dom_and_exposes_filter_and_page_boundaries(tmp_path: 
 def test_html_uses_deterministic_directly_addressable_evaluation_records(
     tmp_path: Path,
 ) -> None:
-    from smc_ict.adapters.reporting.html import render_report
+    from trading_research.adapters.reporting.html import render_report
 
     count = 53
     decisions = [

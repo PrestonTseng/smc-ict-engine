@@ -1,6 +1,6 @@
 # Concepts
 
-`smc-ict-engine` is a research-only command-line engine. It reads completed market candles and writes deterministic research evidence.
+Trading Research Engine is a research-only command-line engine. It reads completed market candles and writes deterministic research evidence.
 
 The engine does not submit orders. It has no broker account, position-size, web-service, or live-trading boundary.
 

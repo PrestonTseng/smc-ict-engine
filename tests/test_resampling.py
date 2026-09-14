@@ -10,7 +10,7 @@ def one_minute_candles(
     provider_id: str = "binance_usdm",
     missing_quote_at: int | None = None,
 ):
-    from smc_ict.domain import ClosedCandle
+    from trading_research.domain import ClosedCandle
 
     provider_symbol = "BTCUSDT" if provider_id == "binance_usdm" else "BTC-USDT-SWAP"
     result = []
@@ -47,8 +47,8 @@ def one_minute_candles(
 
 
 def test_complete_only_utc_resampling_is_exact_and_provider_neutral() -> None:
-    from smc_ict.application.resampling import resample_roles
-    from smc_ict.domain import ClosedCandle
+    from trading_research.application.resampling import resample_roles
+    from trading_research.domain import ClosedCandle
 
     def candles(provider_id: str) -> tuple[ClosedCandle, ...]:
         provider_symbol = "BTCUSDT" if provider_id == "binance_usdm" else "BTC-USDT-SWAP"
@@ -109,7 +109,7 @@ def test_complete_only_utc_resampling_is_exact_and_provider_neutral() -> None:
 
 
 def test_15m_resampling_requires_exact_aligned_complete_closed_buckets() -> None:
-    from smc_ict.application.resampling import resample_complete
+    from trading_research.application.resampling import resample_complete
 
     complete = one_minute_candles(30)
 
@@ -123,7 +123,7 @@ def test_15m_resampling_requires_exact_aligned_complete_closed_buckets() -> None
 
 
 def test_15m_resampling_excludes_developing_and_future_buckets_at_evaluation_time() -> None:
-    from smc_ict.application.resampling import resample_complete
+    from trading_research.application.resampling import resample_complete
 
     candles = one_minute_candles(30)
 
@@ -140,7 +140,7 @@ def test_15m_resampling_excludes_developing_and_future_buckets_at_evaluation_tim
 
 
 def test_15m_resampling_preserves_ohlcv_quote_nullability_and_ignores_provider_extensions() -> None:
-    from smc_ict.application.resampling import resample_complete
+    from trading_research.application.resampling import resample_complete
 
     expected = resample_complete(one_minute_candles(15), "15m")[0]
     okx = resample_complete(one_minute_candles(15, provider_id="okx_swap"), "15m")[0]
@@ -165,7 +165,7 @@ def test_15m_resampling_preserves_ohlcv_quote_nullability_and_ignores_provider_e
 def test_derived_candle_hash_is_deterministic_and_domain_separated() -> None:
     from dataclasses import replace
 
-    from smc_ict.application.resampling import hash_derived_candles, resample_complete
+    from trading_research.application.resampling import hash_derived_candles, resample_complete
 
     bars = resample_complete(one_minute_candles(30), "15m")
 

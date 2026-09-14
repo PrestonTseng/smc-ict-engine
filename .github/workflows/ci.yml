@@ -53,7 +53,7 @@ jobs:
         run: |
           set -euo pipefail
           epoch="$(git show -s --format=%ct HEAD)"
-          build_root="${RUNNER_TEMP}/smc-ict-packages"
+          build_root="${RUNNER_TEMP}/trading-research-packages"
           rm -rf "$build_root" .ci-venv .ci-requirements.txt
           mkdir -p "$build_root/one" "$build_root/two"
           export CI_BUILD_ROOT="$build_root"
@@ -111,11 +111,11 @@ jobs:
               sdist_names = [member.name for member in archive.getmembers()]
           reject_forbidden(wheel_names)
           reject_forbidden(sdist_names)
-          if len(wheel_names) != 61 or len(sdist_names) != 122:
+          if len(wheel_names) != 62 or len(sdist_names) != 125:
               raise SystemExit(
                   f"package member boundary drift: wheel={len(wheel_names)} sdist={len(sdist_names)}"
               )
-          if any(PurePosixPath(name).parts[0] not in {"smc_ict", "smc_ict_engine-0.1.0.dist-info"} for name in wheel_names):
+          if any(PurePosixPath(name).parts[0] not in {"trading_research", "trading_research_engine-0.2.0.dist-info"} for name in wheel_names):
               raise SystemExit("wheel contains a member outside the package boundary")
           for package in one:
               digest = hashlib.sha256(package.read_bytes()).hexdigest()
@@ -129,14 +129,15 @@ jobs:
           uv venv --python 3.13 .ci-venv
           uv pip install --python .ci-venv/bin/python --requirement .ci-requirements.txt
           uv pip install --python .ci-venv/bin/python --no-deps "$CI_BUILD_ROOT"/one/*.whl
-          .ci-venv/bin/smc-ict --help >/dev/null
+          .ci-venv/bin/trading-research --help >/dev/null
 
       - name: Build and smoke-test the exact container image
         run: |
           docker build \
-            --build-arg "GIT_COMMIT=${GITHUB_SHA}" \
-            --tag smc-ict-engine:ci \
+            --tag trading-research-engine:ci \
             .
-          test "$(docker image inspect smc-ict-engine:ci --format '{{.Config.User}}')" = "10001:10001"
-          test "$(docker image inspect smc-ict-engine:ci --format '{{range .Config.Env}}{{println .}}{{end}}' | sed -n 's/^SMC_ICT_GIT_COMMIT=//p')" = "${GITHUB_SHA}"
-          docker run --rm --read-only --user 10001:10001 smc-ict-engine:ci --help >/dev/null
+          test "$(docker image inspect trading-research-engine:ci --format '{{.Config.User}}')" = "10001:10001"
+          host_code_hash="$(uv run python -c 'from trading_research.provenance import calculate_code_hash; print(calculate_code_hash())')"
+          image_code_hash="$(docker run --rm --read-only --user 10001:10001 --entrypoint python trading-research-engine:ci -c 'from trading_research.provenance import calculate_code_hash; print(calculate_code_hash())')"
+          test "$image_code_hash" = "$host_code_hash"
+          docker run --rm --read-only --user 10001:10001 trading-research-engine:ci --help >/dev/null

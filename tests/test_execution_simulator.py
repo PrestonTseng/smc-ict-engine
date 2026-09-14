@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from smc_ict.configuration.models import (
+from trading_research.configuration.models import (
     BacktestCostConfig,
     BacktestEntryConfig,
     BacktestExecutionConfig,
 )
-from smc_ict.domain import ClosedCandle, Decision
-from smc_ict.domain.backtesting import PipelineTrace, ReplayEvaluation
+from trading_research.domain import ClosedCandle, Decision
+from trading_research.domain.backtesting import PipelineTrace, ReplayEvaluation
 
 
 def candle(
@@ -73,7 +73,7 @@ def simulator(
     fee_bps: str = "0",
     slippage_bps: str = "0",
 ):
-    from smc_ict.application.execution_simulator import ExecutionSimulator
+    from trading_research.application.execution_simulator import ExecutionSimulator
 
     return ExecutionSimulator(
         entry=BacktestEntryConfig("touch_limit", expiry_bars),

@@ -9,12 +9,21 @@ from typing import Any, cast
 import pytest
 
 
+def test_run_identity_changes_with_code_hash() -> None:
+    from trading_research.application.runtime import EngineRunner
+
+    first = EngineRunner._run_id("a" * 64, "b" * 64, 59_999, "c" * 64, "d" * 64)
+    second = EngineRunner._run_id("a" * 64, "b" * 64, 59_999, "c" * 64, "e" * 64)
+
+    assert first != second
+
+
 def test_runtime_paths_are_fixed_derivations_of_the_required_data_folder(tmp_path: Path) -> None:
-    from smc_ict.composition.runtime_services import RuntimePaths
+    from trading_research.composition.runtime_services import RuntimePaths
 
     paths = RuntimePaths.from_environ({"DATA_FOLDER": str(tmp_path)})
 
-    assert paths.database == tmp_path / "smc_ict.db"
+    assert paths.database == tmp_path / "trading_research.db"
     assert paths.lock == tmp_path / "engine.lock"
     assert paths.health == tmp_path / "scheduler.ready"
     assert paths.backtests == tmp_path / "backtests"
@@ -27,9 +36,9 @@ def test_runtime_paths_are_fixed_derivations_of_the_required_data_folder(tmp_pat
 def test_run_readiness_uses_historical_sync_service_before_analysis(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from smc_ict.application import runtime
-    from smc_ict.application.ports import InstrumentMapping
-    from smc_ict.configuration.models import (
+    from trading_research.application import runtime
+    from trading_research.application.ports import InstrumentMapping
+    from trading_research.configuration.models import (
         MarketDataConfig,
         NotificationConfig,
         StrategyConfig,
@@ -87,7 +96,7 @@ def test_run_readiness_uses_historical_sync_service_before_analysis(
         lock_path=tmp_path / "engine.lock",
         config_loader=lambda _request: config,
         clock_ms=lambda: 120_000,
-        git_commit="a" * 40,
+        code_hash="a" * 64,
     )
 
     with pytest.raises(ReadinessFailure, match="readiness failed"):
@@ -97,7 +106,7 @@ def test_run_readiness_uses_historical_sync_service_before_analysis(
 
 
 def _hold_process_lock(path: str, ready: Any) -> None:
-    from smc_ict.application.runtime import ProcessLock
+    from trading_research.application.runtime import ProcessLock
 
     with ProcessLock(path) as lock:
         assert lock.acquired
@@ -108,10 +117,10 @@ def _hold_process_lock(path: str, ready: Any) -> None:
 def test_run_once_wires_sqlite_dedup_and_reports_final_flush_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from smc_ict.adapters.persistence.sqlite import SQLiteRepository
-    from smc_ict.application.notifications import RoutingReceipt
-    from smc_ict.application.runtime import RunReceipt
-    from smc_ict.composition import runtime_services
+    from trading_research.adapters.persistence.sqlite import SQLiteRepository
+    from trading_research.application.notifications import RoutingReceipt
+    from trading_research.application.runtime import RunReceipt
+    from trading_research.composition import runtime_services
 
     class Router:
         def __init__(
@@ -163,10 +172,10 @@ def test_run_once_wires_sqlite_dedup_and_reports_final_flush_failure(
 def test_run_once_selects_notification_adapter_from_closed_registry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from smc_ict.application.notifications import RoutingReceipt
-    from smc_ict.application.runtime import RunReceipt
-    from smc_ict.composition import runtime_services
-    from smc_ict.configuration.models import (
+    from trading_research.application.notifications import RoutingReceipt
+    from trading_research.application.runtime import RunReceipt
+    from trading_research.composition import runtime_services
+    from trading_research.configuration.models import (
         BatchingConfig,
         DeduplicationConfig,
         NotificationConfig,
@@ -250,22 +259,22 @@ def test_run_once_selects_notification_adapter_from_closed_registry(
 
 
 def test_manual_and_scheduled_runs_share_one_deterministic_engine_path(tmp_path: Path) -> None:
-    from smc_ict.adapters.persistence.sqlite import SQLiteRepository
-    from smc_ict.application.graph import ConfiguredNode
-    from smc_ict.application.ports import KlinePage
-    from smc_ict.application.runtime import (
+    from trading_research.adapters.persistence.sqlite import SQLiteRepository
+    from trading_research.application.graph import ConfiguredNode
+    from trading_research.application.ports import KlinePage
+    from trading_research.application.runtime import (
         EngineRunner,
         RunRequest,
         RuntimeConfiguration,
     )
-    from smc_ict.configuration.models import (
+    from trading_research.configuration.models import (
         MarketDataConfig,
         NotificationConfig,
         SignalConfig,
         StrategyConfig,
         frozen_mapping,
     )
-    from smc_ict.domain import ClosedCandle, Observation
+    from trading_research.domain import ClosedCandle, Observation
 
     strategy = StrategyConfig(
         name="fixture-strategy",
@@ -347,7 +356,7 @@ def test_manual_and_scheduled_runs_share_one_deterministic_engine_path(tmp_path:
         plugin_id = "smc.swing_structure"
 
         def evaluate(self, context: object, dependencies: Mapping[str, Observation]) -> Observation:
-            from smc_ict.application.graph import RunContext
+            from trading_research.application.graph import RunContext
 
             runtime_context = cast(RunContext, context)
             instrument_id = runtime_context.instrument_id
@@ -385,7 +394,7 @@ def test_manual_and_scheduled_runs_share_one_deterministic_engine_path(tmp_path:
             lock_path=root / "engine.lock",
             config_loader=lambda _request: runtime_config,
             clock_ms=lambda: 300_000,
-            git_commit="a" * 40,
+            code_hash="a" * 64,
             event_sink=emit,
         )
         receipt = runner.run(RunRequest("strategy.yaml", "market.yaml", None, trigger))
@@ -411,6 +420,7 @@ def test_manual_and_scheduled_runs_share_one_deterministic_engine_path(tmp_path:
         "status": "RUNNING",
         "instrument_count": 1,
         "evaluation_time_ms": 299_999,
+        "event_time_ms": 300_000,
     }
     assert dict(manual_events[1].payload) == {
         "status": "UNAVAILABLE",
@@ -425,8 +435,12 @@ def test_manual_and_scheduled_runs_share_one_deterministic_engine_path(tmp_path:
         "status": "SUCCEEDED",
         "instrument_count": 1,
         "decision_count": 1,
+        "event_time_ms": 300_000,
     }
-    assert manual_repository.load_run(manual.run_id).status == "SUCCEEDED"
+    stored_run = manual_repository.load_run(manual.run_id)
+    assert stored_run.status == "SUCCEEDED"
+    assert stored_run.code_hash == "a" * 64
+    assert stored_run.git_commit is None
     assert scheduled_repository.load_decisions(scheduled.run_id)[0].decision_status == "UNAVAILABLE"
 
     isolated, _, isolated_repository = execute(
@@ -440,7 +454,7 @@ def test_manual_and_scheduled_runs_share_one_deterministic_engine_path(tmp_path:
 def test_process_lock_rejects_a_competing_process_and_releases_after_process_death(
     tmp_path: Path,
 ) -> None:
-    from smc_ict.application.runtime import ProcessLock
+    from trading_research.application.runtime import ProcessLock
 
     lock_path = tmp_path / "engine.lock"
     ready = Event()
@@ -460,8 +474,8 @@ def test_process_lock_rejects_a_competing_process_and_releases_after_process_dea
 
 
 def test_ready_decision_notification_payload_contains_bounded_debug_evidence() -> None:
-    from smc_ict.application.runtime import _decision_notification_payload
-    from smc_ict.domain import Decision, hash_decision
+    from trading_research.application.runtime import _decision_notification_payload
+    from trading_research.domain import Decision, hash_decision
 
     decision = Decision(
         instrument_id="BTC-USDT-PERP",
@@ -496,8 +510,8 @@ def test_ready_decision_notification_payload_contains_bounded_debug_evidence() -
 def test_ready_decision_notification_reward_risk_is_stable_and_non_crashing(
     stop: str, target: str, expected_ratio: str
 ) -> None:
-    from smc_ict.application.runtime import _decision_notification_payload
-    from smc_ict.domain import Decision
+    from trading_research.application.runtime import _decision_notification_payload
+    from trading_research.domain import Decision
 
     decision = Decision(
         instrument_id="BTC-USDT-PERP",
@@ -517,8 +531,8 @@ def test_ready_decision_notification_reward_risk_is_stable_and_non_crashing(
 
 @pytest.mark.parametrize("status", ["NO_TRADE", "UNAVAILABLE"])
 def test_no_decision_notification_payload_identifies_first_failed_signal(status: str) -> None:
-    from smc_ict.application.runtime import _decision_notification_payload
-    from smc_ict.domain import Decision, hash_decision
+    from trading_research.application.runtime import _decision_notification_payload
+    from trading_research.domain import Decision, hash_decision
 
     decision = Decision(
         instrument_id="BTC-USDT-PERP",
@@ -541,8 +555,8 @@ def test_no_decision_notification_payload_identifies_first_failed_signal(status:
 
 
 def test_restart_recovery_marks_interrupted_running_rows_failed(tmp_path: Path) -> None:
-    from smc_ict.adapters.persistence.sqlite import SQLiteRepository
-    from smc_ict.application.ports import RunRecord
+    from trading_research.adapters.persistence.sqlite import SQLiteRepository
+    from trading_research.application.ports import RunRecord
 
     repository = SQLiteRepository(tmp_path / "runtime.sqlite3")
     repository.store_run(
@@ -557,7 +571,8 @@ def test_restart_recovery_marks_interrupted_running_rows_failed(tmp_path: Path) 
             provider_id="binance_usdm",
             market_type="LINEAR_PERPETUAL",
             market_config_hash="b" * 64,
-            git_commit="c" * 40,
+            git_commit=None,
+            code_hash="c" * 64,
             data_start_open_ms=0,
             data_end_close_ms=59_999,
             data_hash="d" * 64,
@@ -574,11 +589,11 @@ def test_restart_recovery_marks_interrupted_running_rows_failed(tmp_path: Path) 
 
 
 def test_scheduler_recovery_cannot_fail_a_run_owned_by_an_active_process(tmp_path: Path) -> None:
-    from smc_ict.adapters.persistence.sqlite import SQLiteRepository
-    from smc_ict.application.ports import RunRecord
-    from smc_ict.application.runtime import ProcessLock, RunReceipt
-    from smc_ict.application.scheduler import InternalScheduler, RetryPolicy
-    from smc_ict.configuration.models import ScheduleConfig
+    from trading_research.adapters.persistence.sqlite import SQLiteRepository
+    from trading_research.application.ports import RunRecord
+    from trading_research.application.runtime import ProcessLock, RunReceipt
+    from trading_research.application.scheduler import InternalScheduler, RetryPolicy
+    from trading_research.configuration.models import ScheduleConfig
 
     lock_path = tmp_path / "engine.lock"
     repository = SQLiteRepository(tmp_path / "runtime.sqlite3")
@@ -594,7 +609,8 @@ def test_scheduler_recovery_cannot_fail_a_run_owned_by_an_active_process(tmp_pat
             "binance_usdm",
             "LINEAR_PERPETUAL",
             "b" * 64,
-            "c" * 40,
+            None,
+            "c" * 64,
             0,
             59_999,
             "d" * 64,
@@ -621,8 +637,11 @@ def test_scheduler_recovery_cannot_fail_a_run_owned_by_an_active_process(tmp_pat
 
 
 def test_atomic_run_commit_rolls_back_evidence_when_a_decision_insert_fails(tmp_path: Path) -> None:
-    from smc_ict.adapters.persistence.sqlite import PersistenceConflictError, SQLiteRepository
-    from smc_ict.application.ports import DecisionRecord, ObservationRecord, RunRecord
+    from trading_research.adapters.persistence.sqlite import (
+        PersistenceConflictError,
+        SQLiteRepository,
+    )
+    from trading_research.application.ports import DecisionRecord, ObservationRecord, RunRecord
 
     repository = SQLiteRepository(tmp_path / "runtime.sqlite3")
     repository.store_run(
@@ -637,7 +656,8 @@ def test_atomic_run_commit_rolls_back_evidence_when_a_decision_insert_fails(tmp_
             "binance_usdm",
             "LINEAR_PERPETUAL",
             "b" * 64,
-            "c" * 40,
+            None,
+            "c" * 64,
             0,
             59_999,
             "d" * 64,

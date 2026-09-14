@@ -12,8 +12,8 @@ FIXTURES = Path(__file__).parent / "provider_fixtures"
 
 
 def test_binance_normalizes_documented_closed_kline_shape_exactly() -> None:
-    from smc_ict.adapters.market_data.binance_usdm import BinanceUsdmProvider
-    from smc_ict.application.ports import KlineRequest
+    from trading_research.adapters.market_data.binance_usdm import BinanceUsdmProvider
+    from trading_research.application.ports import KlineRequest
 
     payload = json.loads((FIXTURES / "binance_usdm_klines.json").read_text(encoding="utf-8"))
     calls: list[tuple[str, dict[str, object]]] = []
@@ -75,8 +75,8 @@ def test_binance_normalizes_documented_closed_kline_shape_exactly() -> None:
 
 
 def test_okx_metadata_gate_and_documented_closed_kline_shape() -> None:
-    from smc_ict.adapters.market_data.okx_swap import OkxSwapProvider
-    from smc_ict.application.ports import InstrumentMapping, KlineRequest
+    from trading_research.adapters.market_data.okx_swap import OkxSwapProvider
+    from trading_research.application.ports import InstrumentMapping, KlineRequest
 
     candles = json.loads((FIXTURES / "okx_history_candles.json").read_text(encoding="utf-8"))
     instruments = json.loads((FIXTURES / "okx_instruments.json").read_text(encoding="utf-8"))
@@ -140,8 +140,8 @@ def test_okx_metadata_gate_and_documented_closed_kline_shape() -> None:
 
 
 def test_okx_reuses_one_server_clock_snapshot_across_a_bounded_sync() -> None:
-    from smc_ict.adapters.market_data.okx_swap import OkxSwapProvider
-    from smc_ict.application.ports import InstrumentMapping, KlineRequest
+    from trading_research.adapters.market_data.okx_swap import OkxSwapProvider
+    from trading_research.application.ports import InstrumentMapping, KlineRequest
 
     candles = json.loads((FIXTURES / "okx_history_candles.json").read_text(encoding="utf-8"))
     instruments = json.loads((FIXTURES / "okx_instruments.json").read_text(encoding="utf-8"))
@@ -177,8 +177,8 @@ def test_okx_reuses_one_server_clock_snapshot_across_a_bounded_sync() -> None:
 
 
 def test_okx_final_page_trims_older_provider_spill_rows() -> None:
-    from smc_ict.adapters.market_data.okx_swap import OkxSwapProvider
-    from smc_ict.application.ports import InstrumentMapping, KlineRequest
+    from trading_research.adapters.market_data.okx_swap import OkxSwapProvider
+    from trading_research.application.ports import InstrumentMapping, KlineRequest
 
     row = json.loads((FIXTURES / "okx_history_candles.json").read_text(encoding="utf-8"))["data"][0]
 
@@ -222,9 +222,9 @@ def test_okx_final_page_trims_older_provider_spill_rows() -> None:
 
 
 def test_generic_sync_paginates_and_rejects_non_contiguous_or_conflicting_pages() -> None:
-    from smc_ict.application.market_sync import MarketSyncService
-    from smc_ict.application.ports import InstrumentMapping, KlinePage
-    from smc_ict.domain import ClosedCandle
+    from trading_research.application.market_sync import MarketSyncService
+    from trading_research.application.ports import InstrumentMapping, KlinePage
+    from trading_research.domain import ClosedCandle
 
     def candle(open_time_ms: int, close: str = "101") -> ClosedCandle:
         return ClosedCandle(
@@ -319,10 +319,10 @@ def test_generic_sync_paginates_and_rejects_non_contiguous_or_conflicting_pages(
 def test_interrupted_sync_resumes_only_missing_candles_and_completed_range_is_idempotent(
     tmp_path: Path,
 ) -> None:
-    from smc_ict.adapters.persistence.sqlite import SQLiteRepository
-    from smc_ict.application.market_sync import MarketSyncService
-    from smc_ict.application.ports import InstrumentMapping, KlinePage
-    from smc_ict.domain import ClosedCandle
+    from trading_research.adapters.persistence.sqlite import SQLiteRepository
+    from trading_research.application.market_sync import MarketSyncService
+    from trading_research.application.ports import InstrumentMapping, KlinePage
+    from trading_research.domain import ClosedCandle
 
     def candle(open_time_ms: int) -> ClosedCandle:
         return ClosedCandle(
@@ -405,10 +405,10 @@ def test_interrupted_sync_resumes_only_missing_candles_and_completed_range_is_id
 def test_two_instrument_ninety_day_bootstrap_completes_inside_lease_and_is_idempotent(
     tmp_path: Path,
 ) -> None:
-    from smc_ict.adapters.persistence.sqlite import SQLiteRepository
-    from smc_ict.application.market_sync import MarketSyncService
-    from smc_ict.application.ports import InstrumentMapping, KlinePage, KlineRequest
-    from smc_ict.domain import ClosedCandle
+    from trading_research.adapters.persistence.sqlite import SQLiteRepository
+    from trading_research.application.market_sync import MarketSyncService
+    from trading_research.application.ports import InstrumentMapping, KlinePage, KlineRequest
+    from trading_research.domain import ClosedCandle
 
     history_minutes = 90 * 24 * 60
     end_open_time_ms = (history_minutes - 1) * 60_000
@@ -485,10 +485,10 @@ def test_two_instrument_ninety_day_bootstrap_completes_inside_lease_and_is_idemp
 
 
 def test_switching_only_market_data_config_selects_the_concrete_provider() -> None:
-    from smc_ict.adapters.market_data.binance_usdm import BinanceUsdmProvider
-    from smc_ict.adapters.market_data.okx_swap import OkxSwapProvider
-    from smc_ict.composition import build_market_provider, market_data_composition_root
-    from smc_ict.configuration import load_market_data
+    from trading_research.adapters.market_data.binance_usdm import BinanceUsdmProvider
+    from trading_research.adapters.market_data.okx_swap import OkxSwapProvider
+    from trading_research.composition import build_market_provider, market_data_composition_root
+    from trading_research.configuration import load_market_data
 
     root = market_data_composition_root()
     binance = build_market_provider(
@@ -502,9 +502,9 @@ def test_switching_only_market_data_config_selects_the_concrete_provider() -> No
 
 
 def test_provider_error_bodies_are_translated_without_retaining_remote_payloads() -> None:
-    from smc_ict.adapters.market_data.binance_usdm import BinanceUsdmProvider
-    from smc_ict.adapters.market_data.okx_swap import OkxSwapProvider
-    from smc_ict.application.ports import (
+    from trading_research.adapters.market_data.binance_usdm import BinanceUsdmProvider
+    from trading_research.adapters.market_data.okx_swap import OkxSwapProvider
+    from trading_research.application.ports import (
         InstrumentMapping,
         KlineRequest,
         ProviderPermanentError,
@@ -550,8 +550,8 @@ def test_provider_error_bodies_are_translated_without_retaining_remote_payloads(
 
 
 def test_binance_rejects_unit_ambiguous_timestamps_even_when_minute_aligned() -> None:
-    from smc_ict.adapters.market_data.binance_usdm import BinanceUsdmProvider
-    from smc_ict.application.ports import KlineRequest, ProviderProtocolError
+    from trading_research.adapters.market_data.binance_usdm import BinanceUsdmProvider
+    from trading_research.application.ports import KlineRequest, ProviderProtocolError
 
     ambiguous_open = 1_800_000_000
     row = [
@@ -593,7 +593,7 @@ def test_json_transport_identifies_the_public_read_only_client(
 ) -> None:
     from urllib.request import Request
 
-    import smc_ict.adapters.market_data.transport as transport
+    import trading_research.adapters.market_data.transport as transport
 
     captured: list[Request] = []
 
@@ -618,7 +618,9 @@ def test_json_transport_identifies_the_public_read_only_client(
         "serverTime": 1722470460000
     }
     assert captured[0].get_header("Accept") == "application/json"
-    assert captured[0].get_header("User-agent") == "smc-ict-engine/0.1 public-market-data"
+    assert (
+        captured[0].get_header("User-agent") == "trading-research-engine/0.2.0 public-market-data"
+    )
 
 
 def test_json_transport_retries_temporary_failures_with_bounded_backoff(
@@ -627,7 +629,7 @@ def test_json_transport_retries_temporary_failures_with_bounded_backoff(
     from urllib.error import URLError
     from urllib.request import Request
 
-    import smc_ict.adapters.market_data.transport as transport
+    import trading_research.adapters.market_data.transport as transport
 
     attempts: list[Request] = []
     sleeps: list[float] = []

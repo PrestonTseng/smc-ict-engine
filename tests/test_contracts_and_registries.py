@@ -8,7 +8,7 @@ import pytest
 
 
 def test_provider_port_models_are_frozen_and_page_progress_is_explicit() -> None:
-    from smc_ict.application.ports import KlinePage, KlineProvider, KlineRequest
+    from trading_research.application.ports import KlinePage, KlineProvider, KlineRequest
 
     request = KlineRequest(
         provider_id="binance_usdm",
@@ -57,7 +57,7 @@ def test_provider_port_models_are_frozen_and_page_progress_is_explicit() -> None
 
 
 def test_notifier_repository_and_plugin_ports_are_provider_neutral() -> None:
-    from smc_ict.application.ports import (
+    from trading_research.application.ports import (
         IndicatorPlugin,
         NotificationEvent,
         Notifier,
@@ -73,18 +73,18 @@ def test_notifier_repository_and_plugin_ports_are_provider_neutral() -> None:
         payload={},
     )
     assert event.event_type == "run_started"
-    assert Notifier.__module__.startswith("smc_ict.application")
-    assert Repository.__module__.startswith("smc_ict.application")
-    assert IndicatorPlugin.__module__.startswith("smc_ict.application")
+    assert Notifier.__module__.startswith("trading_research.application")
+    assert Repository.__module__.startswith("trading_research.application")
+    assert IndicatorPlugin.__module__.startswith("trading_research.application")
 
 
 def test_foundation_registries_are_closed_and_reject_unknown_or_unavailable_ids() -> None:
-    from smc_ict.composition import (
+    from trading_research.composition import (
         UnavailableComponentError,
         UnknownComponentError,
         foundation_composition_root,
     )
-    from smc_ict.configuration import DEFERRED_PLUGIN_IDS
+    from trading_research.configuration import DEFERRED_PLUGIN_IDS
 
     root = foundation_composition_root()
     assert root.providers.ids == ("binance_usdm", "okx_swap")
@@ -103,8 +103,11 @@ def test_foundation_registries_are_closed_and_reject_unknown_or_unavailable_ids(
 
 
 def test_notification_registry_installs_generic_and_discord_adapters_and_fails_closed() -> None:
-    from smc_ict.adapters.notifications import DiscordWebhookNotifier, GenericWebhookNotifier
-    from smc_ict.composition import UnknownComponentError, notification_composition_root
+    from trading_research.adapters.notifications import (
+        DiscordWebhookNotifier,
+        GenericWebhookNotifier,
+    )
+    from trading_research.composition import UnknownComponentError, notification_composition_root
 
     root = notification_composition_root()
 
@@ -116,7 +119,7 @@ def test_notification_registry_installs_generic_and_discord_adapters_and_fails_c
 
 
 def test_architecture_has_one_way_dependencies_and_no_generic_utility_modules() -> None:
-    package = Path(__file__).parents[1] / "src" / "smc_ict"
+    package = Path(__file__).parents[1] / "src" / "trading_research"
     forbidden_names = {"utils.py", "helpers.py"}
     assert not any(path.name in forbidden_names for path in package.rglob("*.py"))
 
@@ -132,7 +135,11 @@ def test_architecture_has_one_way_dependencies_and_no_generic_utility_modules() 
                 if isinstance(node, ast.Import)
                 for alias in node.names
             )
-            assert not any(module.startswith("smc_ict.adapters") for module in imported_modules)
-            assert not any(module.startswith("smc_ict.composition") for module in imported_modules)
+            assert not any(
+                module.startswith("trading_research.adapters") for module in imported_modules
+            )
+            assert not any(
+                module.startswith("trading_research.composition") for module in imported_modules
+            )
             assert "requests" not in imported_modules
             assert "sqlite3" not in imported_modules

@@ -9,7 +9,7 @@ Keep dependency order explicit. A signal can only use configured dependency evid
 Validate a strategy before deployment:
 
 ```sh
-uv run smc-ict validate \
+uv run trading-research validate \
   --strategy strategies/source-aligned-research.yaml \
   --market-data config/market-data.yaml \
   --schedule config/schedule.yaml \

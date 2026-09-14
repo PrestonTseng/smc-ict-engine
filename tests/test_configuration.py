@@ -133,7 +133,7 @@ signals:
 
 
 def api():
-    from smc_ict.configuration import (
+    from trading_research.configuration import (
         DeferredPluginError,
         StrictConfigurationError,
         hash_market_data,
@@ -168,7 +168,7 @@ def notification_kwargs() -> dict[str, object]:
 
 
 def test_configuration_models_are_strict_frozen_pydantic_models() -> None:
-    from smc_ict.configuration.models import MarketDataConfig
+    from trading_research.configuration.models import MarketDataConfig
 
     assert issubclass(MarketDataConfig, BaseModel)
     assert MarketDataConfig.model_config["strict"] is True
@@ -195,7 +195,7 @@ def test_configuration_models_are_strict_frozen_pydantic_models() -> None:
 
 
 def test_schedule_job_and_strategy_config_accept_parent_positional_constructors() -> None:
-    from smc_ict.configuration.models import ScheduleJob, SignalConfig, StrategyConfig
+    from trading_research.configuration.models import ScheduleJob, SignalConfig, StrategyConfig
 
     job_values = (
         "research",
@@ -248,7 +248,7 @@ def test_schedule_job_and_strategy_config_accept_parent_positional_constructors(
 
 
 def test_schedule_job_and_strategy_config_reject_wrong_positional_argument_counts() -> None:
-    from smc_ict.configuration.models import ScheduleJob, StrategyConfig
+    from trading_research.configuration.models import ScheduleJob, StrategyConfig
 
     job_values = (
         "research",
@@ -437,7 +437,7 @@ def test_notifications_load_two_destinations_without_retaining_secrets() -> None
 def test_notifications_loader_accepts_native_discord_adapter() -> None:
     a = api()
     text = NOTIFICATIONS.replace("adapter: generic_webhook", "adapter: discord_webhook", 1).replace(
-        "maximum_events: 20", "maximum_events: 10", 1
+        "maximum_events: 20", "maximum_events: 8", 1
     )
 
     config = a["load_notifications_text"](text, **notification_kwargs())
@@ -446,8 +446,8 @@ def test_notifications_loader_accepts_native_discord_adapter() -> None:
     assert config.destinations["discord_2"].adapter == "generic_webhook"
 
 
-@pytest.mark.parametrize("maximum_events", [11, 1000])
-def test_notifications_loader_rejects_discord_batch_above_ten(maximum_events: int) -> None:
+@pytest.mark.parametrize("maximum_events", [9, 1000])
+def test_notifications_loader_rejects_discord_batch_above_eight(maximum_events: int) -> None:
     a = api()
     text = NOTIFICATIONS.replace("adapter: generic_webhook", "adapter: discord_webhook", 1).replace(
         "maximum_events: 20", f"maximum_events: {maximum_events}", 1
@@ -456,7 +456,7 @@ def test_notifications_loader_rejects_discord_batch_above_ten(maximum_events: in
     with pytest.raises(
         a["StrictConfigurationError"],
         match=r"notifications\.destinations\.discord_1\.batching\.maximum_events: "
-        rf"expected 1\.\.10, got {maximum_events}",
+        rf"expected 1\.\.8, got {maximum_events}",
     ):
         a["load_notifications_text"](text, **notification_kwargs())
 
@@ -612,7 +612,7 @@ def test_checked_in_strategy_uses_source_default_ict_left_width_and_margin() -> 
 
 
 def test_loader_file_boundary_reads_utf8_yaml(tmp_path: Path) -> None:
-    from smc_ict.configuration import load_market_data
+    from trading_research.configuration import load_market_data
 
     path = tmp_path / "market-data.yaml"
     path.write_text(MARKET, encoding="utf-8")

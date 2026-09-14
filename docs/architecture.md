@@ -8,7 +8,7 @@ The `EngineRunner` acquires the shared process lock. It loads all authorities be
 
 The engine synchronizes completed one-minute candles. It resamples only complete higher-timeframe windows. The configured DAG creates observations and decisions.
 
-SQLite has exactly five tables: `candles_1m`, `sync_state`, `runs`, `observations`, and `decisions`. A successful run commits its evidence atomically. The existing `runs` table also holds validated, redacted notification deduplication JSON so suppression survives child-process boundaries without a sixth table or sidecar store.
+SQLite schema version 2 has exactly five tables: `candles_1m`, `sync_state`, `runs`, `observations`, and `decisions`. A successful run commits its evidence atomically. New run rows identify the automatically hashed installed Python payload with `code_hash`. Migrated version 1 rows retain their original `git_commit` and never receive a manufactured hash. The `runs` table also holds validated, redacted notification deduplication JSON so suppression survives child-process boundaries without a sixth table or sidecar store.
 
 The scheduler owns explicit child processes. Startup recovery uses the same process lock. Shutdown stops new fires before it stops and reconciles an active child.
 

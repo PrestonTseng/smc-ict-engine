@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from smc_ict.application.execution_simulator import TradeRecord
-from smc_ict.domain import Decision
-from smc_ict.domain.backtesting import PipelineTrace, ReplayEvaluation
+from trading_research.application.execution_simulator import TradeRecord
+from trading_research.domain import Decision
+from trading_research.domain.backtesting import PipelineTrace, ReplayEvaluation
 
 
 def trade(
@@ -67,7 +67,7 @@ def evaluation(status: str, decision_hash: str, failed: str | None) -> ReplayEva
 
 
 def test_metrics_are_normalized_and_grouped_in_deterministic_order() -> None:
-    from smc_ict.application.metrics import summarize_trades
+    from trading_research.application.metrics import summarize_trades
 
     trades = (
         trade(
@@ -121,7 +121,7 @@ def test_metrics_are_normalized_and_grouped_in_deterministic_order() -> None:
 
 
 def test_zero_loss_and_empty_denominators_are_explicit_and_dispositions_are_counted() -> None:
-    from smc_ict.application.metrics import summarize_backtest
+    from trading_research.application.metrics import summarize_backtest
 
     winner = trade(
         "1" * 64,

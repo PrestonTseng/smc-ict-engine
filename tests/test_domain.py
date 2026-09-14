@@ -6,7 +6,7 @@ import pytest
 
 
 def test_decimal_text_normalizes_fixed_point_without_float_rounding() -> None:
-    from smc_ict.domain import DecimalText
+    from trading_research.domain import DecimalText
 
     assert str(DecimalText("001.0")) == "1"
     assert str(DecimalText("0.1000")) == "0.1"
@@ -19,7 +19,7 @@ def test_decimal_text_normalizes_fixed_point_without_float_rounding() -> None:
 
 
 def test_identifiers_and_utc_timestamp_are_canonical() -> None:
-    from smc_ict.domain import EventType, InstrumentId, Timeframe, UtcTimestamp
+    from trading_research.domain import EventType, InstrumentId, Timeframe, UtcTimestamp
 
     assert str(InstrumentId("BTC-USDT-PERP")) == "BTC-USDT-PERP"
     assert str(Timeframe("15m")) == "15m"
@@ -50,7 +50,7 @@ def test_identifiers_and_utc_timestamp_are_canonical() -> None:
 
 
 def test_closed_candle_enforces_alignment_closure_ohlc_and_immutable_extensions() -> None:
-    from smc_ict.domain import ClosedCandle
+    from trading_research.domain import ClosedCandle
 
     candle = ClosedCandle(
         provider_id="binance_usdm",
@@ -124,7 +124,7 @@ def test_closed_candle_enforces_alignment_closure_ohlc_and_immutable_extensions(
 
 
 def test_candle_hash_is_domain_separated_and_order_deterministic() -> None:
-    from smc_ict.domain import ClosedCandle, hash_candles
+    from trading_research.domain import ClosedCandle, hash_candles
 
     def candle(instrument: str) -> ClosedCandle:
         return ClosedCandle(

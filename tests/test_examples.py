@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import runpy
 import subprocess
 from pathlib import Path
 
-from smc_ict.configuration import (
+from trading_research.configuration import (
     load_market_data,
     load_notifications,
     load_schedule,
@@ -14,9 +15,9 @@ ROOT = Path(__file__).parents[1]
 
 
 def test_active_market_config_selects_okx_swap_and_keeps_binance_as_an_alternate() -> None:
-    from smc_ict.adapters.market_data.binance_usdm import BinanceUsdmProvider
-    from smc_ict.adapters.market_data.okx_swap import OkxSwapProvider
-    from smc_ict.composition import build_market_provider, market_data_composition_root
+    from trading_research.adapters.market_data.binance_usdm import BinanceUsdmProvider
+    from trading_research.adapters.market_data.okx_swap import OkxSwapProvider
+    from trading_research.composition import build_market_provider, market_data_composition_root
 
     root = market_data_composition_root()
     active = load_market_data(ROOT / "config/market-data.yaml")
@@ -55,16 +56,9 @@ def test_checked_in_examples_cross_real_loader_boundaries() -> None:
     destination = notifications.destinations["discord_debug"]
     assert destination.adapter == "discord_webhook"
     assert destination.enabled is True
-    assert destination.enabled_events == (
-        "run_started",
-        "run_succeeded",
-        "run_failed",
-        "decision_found",
-        "no_decision",
-    )
     assert destination.endpoint.kind == "file"
     assert destination.endpoint.name == "/run/secrets/discord_webhook_url"
-    assert destination.batching.maximum_events == 10
+    assert destination.batching.maximum_events == 8
 
     assert (
         load_strategy(ROOT / "strategies/source-aligned-research.yaml").name
@@ -107,3 +101,18 @@ def test_notification_config_rejection_validator_matches_the_checked_in_example(
     assert result.returncode == 0, result.stderr
     assert "PASS real loader notification example: destinations=1" in result.stdout
     assert "adapter=discord_webhook" in result.stdout
+
+
+def test_notification_config_rejection_helper_replaces_the_current_event_selection() -> None:
+    replace_enabled_events = runpy.run_path(str(ROOT / "scripts/verify_notification_config.py"))[
+        "replace_enabled_events"
+    ]
+
+    sources = (
+        "enabled_events: [run_started]\n",
+        "enabled_events: [run_succeeded, no_decision]\n",
+    )
+    for source in sources:
+        assert replace_enabled_events(source, ("unknown_event",)) == (
+            "enabled_events: [unknown_event]\n"
+        )

@@ -5,15 +5,15 @@ from decimal import Decimal
 
 import pytest
 
-from smc_ict.application.graph import RunContext
-from smc_ict.application.resampling import DerivedCandle
-from smc_ict.domain import Observation
+from trading_research.application.graph import RunContext
+from trading_research.application.resampling import DerivedCandle
+from trading_research.domain import Observation
 
 
 def candles(
     values: Iterable[tuple[str, str, str, str]], *, interval: str = "5m"
 ) -> tuple[DerivedCandle, ...]:
-    from smc_ict.domain import Timeframe
+    from trading_research.domain import Timeframe
 
     duration = Timeframe(interval).duration_minutes * 60_000
     return tuple(
@@ -100,7 +100,7 @@ def mirrored(values: list[tuple[str, str, str, str]]) -> list[tuple[str, str, st
 
 
 def test_execution_plugin_uses_the_configured_15m_candle_identity() -> None:
-    from smc_ict.indicators.ict import ClusteredLiquidityPlugin
+    from trading_research.indicators.ict import ClusteredLiquidityPlugin
 
     series = candles([("100", "101", "99", "100")] * 12, interval="15m")
     observation = ClusteredLiquidityPlugin(
@@ -111,7 +111,7 @@ def test_execution_plugin_uses_the_configured_15m_candle_identity() -> None:
 
 
 def test_execution_plugin_retains_configured_15m_identity_when_no_bars_are_available() -> None:
-    from smc_ict.indicators.ict import ClusteredLiquidityPlugin
+    from trading_research.indicators.ict import ClusteredLiquidityPlugin
 
     plugin = ClusteredLiquidityPlugin(
         {"pivot_width": 5, "minimum_pivots": 3, "margin_atr_fraction": "0.4"}
@@ -127,7 +127,7 @@ def test_execution_plugin_retains_configured_15m_identity_when_no_bars_are_avail
 
 
 def test_clustered_liquidity_requires_three_pivots_and_tracks_strict_traversal() -> None:
-    from smc_ict.indicators.ict import ClusteredLiquidityPlugin
+    from trading_research.indicators.ict import ClusteredLiquidityPlugin
 
     parameters = {"pivot_width": 3, "minimum_pivots": 3, "margin_atr_fraction": "0.4"}
     plugin = ClusteredLiquidityPlugin(parameters)
@@ -168,7 +168,7 @@ def test_clustered_liquidity_requires_three_pivots_and_tracks_strict_traversal()
 
 
 def test_clustered_liquidity_is_bearishly_symmetric() -> None:
-    from smc_ict.indicators.ict import ClusteredLiquidityPlugin
+    from trading_research.indicators.ict import ClusteredLiquidityPlugin
 
     plugin = ClusteredLiquidityPlugin(
         {"pivot_width": 3, "minimum_pivots": 3, "margin_atr_fraction": "0.4"}
@@ -196,7 +196,7 @@ def test_clustered_liquidity_is_bearishly_symmetric() -> None:
 
 
 def test_completed_liquidity_zone_is_immutable_after_later_same_anchor_cluster() -> None:
-    from smc_ict.indicators.ict import _liquidity_zones
+    from trading_research.indicators.ict import _liquidity_zones
 
     values = liquidity_values()
     active = _liquidity_zones(candles(values), 3, 3, Decimal("0.4"))[0]
@@ -271,7 +271,7 @@ def structure_values() -> list[tuple[str, str, str, str]]:
 
 
 def test_market_structure_emits_first_direction_mss_then_new_level_bos() -> None:
-    from smc_ict.indicators.ict import MarketStructurePlugin
+    from trading_research.indicators.ict import MarketStructurePlugin
 
     parameters = {"pivot_width": 3, "emit_mss": True, "emit_bos": True}
     plugin = MarketStructurePlugin(parameters)
@@ -304,7 +304,7 @@ def test_market_structure_emits_first_direction_mss_then_new_level_bos() -> None
 
 
 def test_market_event_history_is_prefix_invariant() -> None:
-    from smc_ict.indicators.ict import _market_events
+    from trading_research.indicators.ict import _market_events
 
     values = structure_values()
     values.extend(
@@ -328,7 +328,7 @@ def test_market_event_history_is_prefix_invariant() -> None:
 
 
 def test_market_structure_is_bearishly_symmetric_and_rejects_boolean_width() -> None:
-    from smc_ict.indicators.ict import MarketStructurePlugin
+    from trading_research.indicators.ict import MarketStructurePlugin
 
     plugin = MarketStructurePlugin({"pivot_width": 3, "emit_mss": True, "emit_bos": True})
     observation = plugin.evaluate(
@@ -353,7 +353,7 @@ def test_market_structure_is_bearishly_symmetric_and_rejects_boolean_width() -> 
 
 @pytest.mark.parametrize("width", [3, 5, 10])
 def test_ict_plugins_accept_source_valid_left_pivot_width(width: int) -> None:
-    from smc_ict.indicators.ict import ClusteredLiquidityPlugin, MarketStructurePlugin
+    from trading_research.indicators.ict import ClusteredLiquidityPlugin, MarketStructurePlugin
 
     ClusteredLiquidityPlugin(
         {"pivot_width": width, "minimum_pivots": 3, "margin_atr_fraction": "0.4"}
@@ -363,7 +363,7 @@ def test_ict_plugins_accept_source_valid_left_pivot_width(width: int) -> None:
 
 @pytest.mark.parametrize("width", [True, 2, 11])
 def test_ict_plugins_reject_boolean_or_out_of_range_left_pivot_width(width: object) -> None:
-    from smc_ict.indicators.ict import ClusteredLiquidityPlugin, MarketStructurePlugin
+    from trading_research.indicators.ict import ClusteredLiquidityPlugin, MarketStructurePlugin
 
     with pytest.raises((TypeError, ValueError), match="pivot_width"):
         ClusteredLiquidityPlugin(
@@ -375,14 +375,14 @@ def test_ict_plugins_reject_boolean_or_out_of_range_left_pivot_width(width: obje
 
 @pytest.mark.parametrize("margin", ["0.2", "0.4", "0.7"])
 def test_clustered_liquidity_accepts_source_representable_margin_tenths(margin: str) -> None:
-    from smc_ict.indicators.ict import ClusteredLiquidityPlugin
+    from trading_research.indicators.ict import ClusteredLiquidityPlugin
 
     ClusteredLiquidityPlugin({"pivot_width": 5, "minimum_pivots": 3, "margin_atr_fraction": margin})
 
 
 @pytest.mark.parametrize("margin", ["0.1", "0.25", "0.8"])
 def test_clustered_liquidity_rejects_non_source_margin_fraction(margin: str) -> None:
-    from smc_ict.indicators.ict import ClusteredLiquidityPlugin
+    from trading_research.indicators.ict import ClusteredLiquidityPlugin
 
     with pytest.raises(ValueError, match="margin_atr_fraction"):
         ClusteredLiquidityPlugin(
@@ -400,7 +400,7 @@ def fvg_values() -> list[tuple[str, str, str, str]]:
 
 
 def test_ordinary_fvg_requires_displacement_and_full_traversal_is_strict() -> None:
-    from smc_ict.indicators.ict import FairValueGapPlugin
+    from trading_research.indicators.ict import FairValueGapPlugin
 
     parameters = {
         "kind": "ordinary",
@@ -436,7 +436,7 @@ def test_ordinary_fvg_requires_displacement_and_full_traversal_is_strict() -> No
 
 
 def test_ordinary_fvg_rejects_gap_that_contradicts_market_structure_direction() -> None:
-    from smc_ict.indicators.ict import FairValueGapPlugin
+    from trading_research.indicators.ict import FairValueGapPlugin
 
     plugin = FairValueGapPlugin(
         {
@@ -459,7 +459,7 @@ def test_ordinary_fvg_rejects_gap_that_contradicts_market_structure_direction() 
 def test_ordinary_fvg_knowledge_time_includes_retained_market_structure_evidence() -> None:
     from dataclasses import replace
 
-    from smc_ict.indicators.ict import FairValueGapPlugin
+    from trading_research.indicators.ict import FairValueGapPlugin
 
     values = fvg_values()
     values.append(("102", "112", "101", "102"))
@@ -485,7 +485,7 @@ def test_ordinary_fvg_knowledge_time_includes_retained_market_structure_evidence
 
 
 def test_one_right_bar_same_candle_high_low_collision_is_high_then_low() -> None:
-    from smc_ict.indicators.ict import _pivot_candidates
+    from trading_research.indicators.ict import _pivot_candidates
 
     series = candles(
         [
@@ -499,7 +499,7 @@ def test_one_right_bar_same_candle_high_low_collision_is_high_then_low() -> None
 
 
 def test_liquidity_cluster_scan_stops_at_first_same_side_point_above_margin() -> None:
-    from smc_ict.indicators.ict import _matching_liquidity_points, _ZigzagPoint
+    from trading_research.indicators.ict import _matching_liquidity_points, _ZigzagPoint
 
     points = [
         _ZigzagPoint(1, 9, Decimal("100")),
@@ -517,7 +517,7 @@ def test_liquidity_cluster_scan_stops_at_first_same_side_point_above_margin() ->
 
 
 def test_market_structure_selects_previous_zigzag_high_and_low_not_current_point() -> None:
-    from smc_ict.indicators.ict import _selected_structure_points, _ZigzagPoint
+    from trading_research.indicators.ict import _selected_structure_points, _ZigzagPoint
 
     current_high = _ZigzagPoint(1, 9, Decimal("115"))
     previous_low = _ZigzagPoint(-1, 7, Decimal("92"))
@@ -531,7 +531,7 @@ def test_market_structure_selects_previous_zigzag_high_and_low_not_current_point
 
 
 def test_consecutive_ordinary_fvg_extends_latest_gap_instead_of_creating_a_second_gap() -> None:
-    from smc_ict.indicators.ict import _active_gaps
+    from trading_research.indicators.ict import _active_gaps
 
     series = candles(
         [
@@ -553,7 +553,7 @@ def test_consecutive_ordinary_fvg_extends_latest_gap_instead_of_creating_a_secon
 
 
 def test_ordinary_fvg_is_bearishly_symmetric() -> None:
-    from smc_ict.indicators.ict import FairValueGapPlugin
+    from trading_research.indicators.ict import FairValueGapPlugin
 
     parameters = {
         "kind": "ordinary",

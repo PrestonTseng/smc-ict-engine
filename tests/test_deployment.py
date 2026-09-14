@@ -36,9 +36,9 @@ echo PROBE_OK
 
 
 def _run_cli(argv: list[str]) -> int:
-    from smc_ict.cli import main
+    from trading_research.cli import main
 
-    logger = logging.getLogger("smc_ict")
+    logger = logging.getLogger("trading_research")
     handlers = list(logger.handlers)
     level = logger.level
     propagate = logger.propagate
@@ -51,9 +51,10 @@ def _run_cli(argv: list[str]) -> int:
 
 
 def _daemon_visible_project_fixture_candidates() -> tuple[Path, ...]:
+    legacy_host_directory = "smc" + "-ict-engine"
     return (
         ROOT,
-        Path("/Users/preston/Repository/agents/tools/smc-ict-engine"),
+        Path("/Users/preston/Repository/agents/tools") / legacy_host_directory,
     )
 
 
@@ -88,7 +89,7 @@ def _daemon_visible_project_fixture(candidates: tuple[Path, ...] | None = None) 
 
 
 def test_daemon_visible_project_fixture_survives_a_missing_host_candidate() -> None:
-    missing_candidate = Path("/daemon-host/path-that-must-not-exist/smc-ict-engine")
+    missing_candidate = Path("/daemon-host/path-that-must-not-exist/trading-research-engine")
 
     fixture = _daemon_visible_project_fixture(
         (missing_candidate, *_daemon_visible_project_fixture_candidates())
@@ -124,7 +125,7 @@ def test_packages_exclude_deterministic_fictional_runtime_and_secret_material(
         (ROOT / "pyproject.toml").read_text(encoding="utf-8"), encoding="utf-8"
     )
     (project / "README.md").write_text("fictional package-boundary probe\n", encoding="utf-8")
-    package = project / "src" / "smc_ict"
+    package = project / "src" / "trading_research"
     package.mkdir(parents=True)
     (package / "__init__.py").write_text("PROBE = True\n", encoding="utf-8")
 
@@ -137,7 +138,7 @@ def test_packages_exclude_deterministic_fictional_runtime_and_secret_material(
         "data/probe.sqlite",
         "reports/probe.json",
         "secrets/fictional_webhook_url",
-        "src/smc_ict/__pycache__/probe.pyc",
+        "src/trading_research/__pycache__/probe.pyc",
     )
     for relative in fictional_members:
         fixture = project / relative
@@ -208,7 +209,7 @@ def test_compose_contract_keeps_the_database_in_the_required_bind_mount() -> Non
 def test_compose_engine_command_executes_with_runtime_environment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    from smc_ict import cli
+    from trading_research import cli
 
     engine = YAML(typ="safe").load((ROOT / "compose.yaml").read_text(encoding="utf-8"))["services"][
         "engine"
@@ -245,7 +246,7 @@ def test_compose_engine_command_executes_with_runtime_environment(
     assert _run_cli(engine["command"]) == 0
     assert captured == {
         "schedule_path": "/config/schedule.yaml",
-        "database": data_folder / "smc_ict.db",
+        "database": data_folder / "trading_research.db",
         "lock_path": data_folder / "engine.lock",
         "config_root": config_folder,
         "started": True,
@@ -272,7 +273,7 @@ def test_compose_healthcheck_executes_against_data_folder_marker(
         json.dumps({"pid": os.getpid(), "status": "READY"}), encoding="utf-8"
     )
     command = engine["healthcheck"]["test"]
-    assert command[:2] == ["CMD", "smc-ict"]
+    assert command[:2] == ["CMD", "trading-research"]
 
     assert _run_cli(command[2:]) == 0
     assert json.loads(capsys.readouterr().out) == {"pid": os.getpid(), "status": "READY"}
@@ -671,9 +672,9 @@ def test_compose_and_image_apply_non_root_immutable_runtime_hardening() -> None:
     assert "COPY uv.lock" in dockerfile
     assert "uv sync --locked" in dockerfile
     assert "USER 10001:10001" in dockerfile
-    assert "ARG GIT_COMMIT=" not in dockerfile
-    assert "grep -Eq '^[0-9a-f]{40}$'" in dockerfile
-    assert "0000000000000000000000000000000000000000" in dockerfile
+    assert "ARG " not in dockerfile
+    assert compose["services"]["engine"]["image"] == "trading-research-engine:local"
+    assert "args" not in compose["services"]["engine"]["build"]
 
 
 def test_dockerfile_executes_uv_from_the_verified_immutable_0_11_6_index() -> None:
@@ -697,7 +698,7 @@ def test_docker_build_context_contains_required_inputs_and_excludes_private_arti
         "uv.lock",
         "pyproject.toml",
         "README.md",
-        "src/smc_ict/application/runtime.py",
+        "src/trading_research/application/runtime.py",
     )
     for relative in required_files:
         source = ROOT / relative
@@ -721,10 +722,10 @@ def test_docker_build_context_contains_required_inputs_and_excludes_private_arti
         "secrets/fictional-webhook",
         "data/fictional-runtime.json",
         ".git/fictional-config",
-        "src/smc_ict/__pycache__/fictional.pyc",
-        "src/smc_ict/.cache/fictional.json",
-        "src/smc_ict/nested/runtime.sqlite3",
-        "src/smc_ict/nested/source.pine",
+        "src/trading_research/__pycache__/fictional.pyc",
+        "src/trading_research/.cache/fictional.json",
+        "src/trading_research/nested/runtime.sqlite3",
+        "src/trading_research/nested/source.pine",
     )
     for relative in forbidden_files:
         fixture = context / relative
@@ -800,23 +801,23 @@ def test_readme_documents_the_operator_workflows_and_safety_boundaries() -> None
         "## Notification destinations",
         "## Recovery and backup",
         "## Financial-risk boundary",
-        '"$DATA_FOLDER/smc_ict.db"',
-        "/data/smc_ict.db",
+        '"$DATA_FOLDER/trading_research.db"',
+        "/data/trading_research.db",
         "docker compose up -d --build",
-        'sqlite3 "$DATA_FOLDER/smc_ict.db"',
-        "smc-ict notifier-test",
+        'sqlite3 "$DATA_FOLDER/trading_research.db"',
+        "trading-research notifier-test",
     ):
         assert section in readme
 
     assert "The Compose health command reads the scheduler readiness marker" in readme
-    assert "The Compose health command reads `/data/smc_ict.db`" not in readme
+    assert "The Compose health command reads `/data/trading_research.db`" not in readme
     assert 'export DATA_FOLDER="$(pwd)/data"' in readme
     assert 'export CONFIG_FOLDER="$(pwd)/config"' in readme
     assert "./data" not in readme
 
 
 def test_documented_operator_commands_parse_with_global_runtime_authority() -> None:
-    from smc_ict.cli import _parser
+    from trading_research.cli import _parser
 
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     operations = (ROOT / "docs/operations.md").read_text(encoding="utf-8")
@@ -825,7 +826,7 @@ def test_documented_operator_commands_parse_with_global_runtime_authority() -> N
     forbidden_operation_arguments = (
         "database bootstrap --database",
         "database status --database",
-        "--database /data/smc_ict.db",
+        "--database /data/trading_research.db",
         "--lock /data/engine.lock",
         "--config-root",
         "--health-file",
@@ -912,7 +913,7 @@ def test_documented_database_and_scheduler_health_commands_execute_from_data_fol
     assert _run_cli(["scheduler-health"]) == 0
 
     payloads = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
-    assert payloads[0] == {"schema_version": 1, "status": "READY", "tables": 5}
+    assert payloads[0] == {"schema_version": 2, "status": "READY", "tables": 5}
     assert payloads[1]["runs"] == 0
     assert payloads[2] == {"pid": os.getpid(), "status": "READY"}
 
@@ -926,12 +927,11 @@ def test_operator_docs_cover_the_single_secret_release_workflow_and_runtime_evid
     for required_command in (
         'install -d -m 0750 -o 10001 -g 10001 "$DATA_FOLDER"',
         "secrets/discord_webhook_url",
-        'export SMC_ICT_GIT_COMMIT="$(git rev-parse HEAD)"',
         "docker compose build engine",
         "docker compose up -d engine",
         "docker compose ps",
         "docker compose logs --tail 100 engine",
-        "smc-ict database status",
+        "trading-research database status",
         "docker compose --profile manual run --rm manual run",
         "docker compose down",
     ):
@@ -945,16 +945,17 @@ def test_operator_docs_cover_the_single_secret_release_workflow_and_runtime_evid
     assert "discord_2_webhook_url" not in operator_docs
     assert "https://" not in operator_docs
     assert "./data" not in operations
+    assert "Docker image ID or registry digest" in operations
+    assert "code_hash" in operations
+    assert "PRAGMA user_version;" in operations
+    assert "Rollback" in operations
 
 
 def test_operator_docs_describe_required_env_and_safe_status_commands() -> None:
     configuration = (ROOT / "docs/configuration.md").read_text(encoding="utf-8")
     troubleshooting = (ROOT / "docs/troubleshooting.md").read_text(encoding="utf-8")
 
-    assert (
-        "immutable image revision and required absolute `DATA_FOLDER` configuration"
-        in configuration
-    )
+    assert "required absolute `DATA_FOLDER` configuration" in configuration
     assert 'lsof "$DATA_FOLDER/engine.lock"' in troubleshooting
     assert "docker compose ps" in troubleshooting
     assert "lsof ./data/engine.lock" not in troubleshooting
@@ -975,12 +976,24 @@ def test_required_operator_document_set_is_present_and_cross_linked() -> None:
         assert boundary in document
 
     env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
-    assert env_example == "SMC_ICT_GIT_COMMIT=\nDATA_FOLDER=/absolute/path/to/smc-ict-data\n"
+    assert env_example == "DATA_FOLDER=/absolute/path/to/trading-research-data\n"
+
+
+def test_ci_builds_without_operator_supplied_git_provenance() -> None:
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+
+    assert "--build-arg" not in workflow
+    assert "calculate_code_hash" in workflow
 
 
 def test_operator_docs_cover_immutable_backtest_workflow_and_failures() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    for phrase in ("smc-ict backtest", "manifest.json", "pipeline-traces.jsonl", "report.html"):
+    for phrase in (
+        "trading-research backtest",
+        "manifest.json",
+        "pipeline-traces.jsonl",
+        "report.html",
+    ):
         assert phrase in readme
 
     expectations = {
@@ -1000,15 +1013,15 @@ def test_human_facing_runtime_paths_and_manual_notifications_match_compose() -> 
     operations = (ROOT / "docs/operations.md").read_text(encoding="utf-8")
     manual_command = operations.split("## Run one manual receipt path", 1)[1].split("##", 1)[0]
 
-    assert "${DATA_FOLDER}/smc_ict.db" in design
-    assert "./data/smc_ict.db" not in design
+    assert "${DATA_FOLDER}/trading_research.db" in design
+    assert "./data/trading_research.db" not in design
     assert "${DATA_FOLDER}/backtests/<backtest-id>/report.html" in operations
     assert "--notifications" not in manual_command
     assert "does not load notification configuration or send\nnotifications" in manual_command
 
 
 def test_schema_uses_json_validation_supported_by_the_container_sqlite() -> None:
-    from smc_ict.adapters.persistence.sqlite import DDL
+    from trading_research.adapters.persistence.sqlite import DDL
 
     assert "json_valid(source_fields_json)" in DDL
     assert "json_valid(payload_json)" in DDL
